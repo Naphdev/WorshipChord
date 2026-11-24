@@ -628,7 +628,7 @@ function parseRoot(note) {
 
 function strictChordToken(rawToken) {
   const token = String(rawToken || '').replace(/[\[\](){}.,;:|]/g, '').replace(/♯/g, '#').replace(/♭/g, 'b').trim();
-  const quality = '(?:(?:maj|min|m|dim|aug|sus2|sus4|sus|add)(?:\\d{1,2})?|\\d{1,2}(?:sus2|sus4|sus|add\\d{1,2})?)?';
+  const quality = '(?:(?:maj|min|m|dim|aug|sus2|sus4|sus|add)(?:\\d{1,2})?|\\d{1,2}(?:sus2|sus4|sus|add\\d{1,2})?|-)?';
   const pattern = new RegExp(`^[A-G](?:#|b)?${quality}(?:\\/[A-G](?:#|b)?)?$`);
   return pattern.test(token) ? token : null;
 }
@@ -651,24 +651,45 @@ function transposeChord(chord, shift) {
   return `${names[(root.semitones + shift + 120) % 12]}${suffix}${bass}`;
 }
 
+const CHORD_EXPRESSION_PATTERN = /[A-G](?:#|b)?(?:(?:maj|min|m|dim|aug|sus2|sus4|sus|add\d{1,2}|\d{1,2})|-(?=$|[\s|,;:/(){}]))?(?:\/[A-G](?:#|b)?)?/g;
+
+function isChordExpression(value) {
+  const chords = value.match(CHORD_EXPRESSION_PATTERN) || [];
+  const residue = value.replace(CHORD_EXPRESSION_PATTERN, '');
+  return chords.length > 0 && /^[\s|,;:/(){}-]*$/.test(residue);
+}
+
+function transposeChordExpression(value, shift) {
+  return value.replace(CHORD_EXPRESSION_PATTERN, (chord) => {
+    const parsed = strictChordToken(chord);
+    return parsed ? transposeChord(parsed, shift) : chord;
+  });
+}
+
 function displayText(song, targetKey = song?.key || 'C') {
   if (!song) return '';
   const shift = (keyIndex(targetKey) - keyIndex(song.key || 'C') + 12) % 12;
   return String(song.text || '').split(/\r?\n/).map((line) => {
+    // Chord lists after section labels (e.g. "INTRO: | A | F#m | E | D |")
+    // are plain text rather than [chord] tokens. Only transpose when every
+    // non-chord character in the labeled suffix is a list separator.
+    const labeledList = /^(\s*(?:intro|midtro|interlude|ending|outro|bridge|tag)\s*:\s*)(.*)$/i.exec(line);
+    if (labeledList) {
+      const suffix = labeledList[2];
+      if (isChordExpression(suffix)) return labeledList[1] + transposeChordExpression(suffix, shift);
+    }
     // Older imported songs may have an untagged chord-only row (for example "G C").
     // Transpose those rows too, but never scan ordinary lyrics for chord letters.
     const plainTokens = line.trim().split(/\s+/).filter(Boolean);
     const plainChordRow = !line.includes('[') && !/[\u0E00-\u0E7F]/.test(line) && plainTokens.length > 0
-      ? plainTokens.map(strictChordToken)
-      : null;
-    if (plainChordRow?.every(Boolean)) {
-      let tokenIndex = 0;
-      return line.replace(/\S+/g, () => transposeChord(plainChordRow[tokenIndex++], shift));
-    }
+      && plainTokens.some(isChordExpression)
+      && plainTokens.every((token) => isChordExpression(token) || /^[|,;:/]+$/.test(token));
+    if (plainChordRow) return transposeChordExpression(line, shift);
 
     return line.replace(/\[([^\]]+)\]/g, (whole, value) => {
       const singleChord = strictChordToken(value.trim());
       if (singleChord) return `[${transposeChord(singleChord, shift)}]`;
+      if (isChordExpression(value.trim())) return `[${transposeChordExpression(value.trim(), shift)}]`;
       const tokens = value.trim().split(/(\s+)/);
       const transposed = tokens.map((token) => strictChordToken(token) ? transposeChord(strictChordToken(token), shift) : token);
       return `[${transposed.join('')}]`;
