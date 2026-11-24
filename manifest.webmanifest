@@ -1,0 +1,13 @@
+{
+  "name": "WorshipChord — สมุดเพลงนมัสการ",
+  "short_name": "WorshipChord",
+  "description": "สมุดเพลงและคอร์ดสำหรับทีมนมัสการ",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f4ee",
+  "theme_color": "#236b53",
+  "lang": "th",
+  "icons": [
+    { "src": "/icon.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "any maskable" }
+  ]
+}

@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f6f4ee" />
+    <meta name="description" content="สมุดเพลงนมัสการพร้อมคอร์ด สำหรับมือถือและแท็บเล็ต" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="stylesheet" href="/styles.css" />
+    <title>WorshipChord — สมุดเพลง</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="#library" aria-label="WorshipChord หน้ารายการเพลง">
+          <span class="brand-mark">♪</span>
+          <span>Worship<span class="brand-light">Chord</span></span>
+        </a>
+        <div class="top-actions">
+          <button class="icon-button" id="backupButton" title="สำรองข้อมูล" aria-label="สำรองข้อมูล">⇧</button>
+          <button class="icon-button notification-button" id="inboxButton" title="กล่องแจ้งเตือน" aria-label="กล่องแจ้งเตือน" hidden>♢<span id="inboxBadge" class="notification-badge" hidden></span></button>
+          <button class="quiet-button account-button" id="accountButton">เข้าสู่ระบบ</button>
+          <button class="primary-button" id="newSongButton">＋ <span>เพิ่มเพลง</span></button>
+        </div>
+      </header>
+
+      <main>
+        <section id="libraryView" class="library-layout">
+          <div class="library-heading">
+            <div>
+              <p class="eyebrow">WORSHIP SET</p>
+              <h1>เพลงของฉัน</h1>
+              <p class="subheading">จัดลำดับเพลง แล้วเปิดดูคอร์ดระหว่างเล่นจริง</p>
+            </div>
+            <span class="local-badge"><span></span> <span id="localBadgeText">เข้าสู่ระบบเพื่อดูเพลง</span></span>
+          </div>
+          <div id="connectivityBanner" class="connectivity-banner" role="status" aria-live="polite" hidden><span id="connectivityText"></span><button id="syncNowButton" type="button" class="quiet-button" hidden>ลองเชื่อมต่อ</button></div>
+          <div class="library-tools">
+            <label class="search-box"><span aria-hidden="true">⌕</span><input id="searchInput" type="search" placeholder="ค้นหาชื่อเพลงหรือศิลปิน" /></label>
+            <button class="quiet-button" id="importBackupButton">นำเข้าข้อมูล</button>
+            <input id="backupFile" type="file" accept="application/json,.json" hidden />
+          </div>
+          <section id="todaySetlistPanel" class="today-panel" aria-labelledby="todayHeading">
+            <div class="today-heading">
+              <div><p class="eyebrow">SETLIST</p><h2 id="todayHeading">เพลงวันนี้</h2></div>
+              <span id="todaySongCount" class="today-count">0 เพลง</span>
+            </div>
+            <div id="todaySongList" class="today-song-list drop-target" aria-live="polite" aria-label="ลำดับเพลงวันนี้"></div>
+            <p id="todaySetlistEmpty" class="today-empty">กด “+ วันนี้” ที่เพลง หรือ ลากเพลงจากคลังมาวางที่นี่</p>
+          </section>
+          <section id="groupPanel" class="group-panel" hidden aria-labelledby="groupHeading">
+            <div class="group-heading">
+              <div><p class="eyebrow">SHARED WORSHIP SET</p><h2 id="groupHeading">กลุ่มเพลง</h2></div>
+              <div class="group-tools"><select id="groupSelect" aria-label="เลือกกลุ่มเพลง"></select><button class="quiet-button" id="createGroupButton">＋ สร้างกลุ่ม</button><button class="quiet-button" id="addGroupSongButton" hidden>＋ เพิ่มเพลงในกลุ่ม</button><button class="quiet-button" id="inviteGroupButton" disabled>เชิญสมาชิก</button></div>
+            </div>
+            <p id="groupEmptyState" class="group-empty">สร้างกลุ่มเพื่อแชร์เพลงและลำดับเพลงกับทีมแบบเรียลไทม์</p>
+            <p id="groupDropHint" class="group-drop-hint" hidden>ลากเพลงจากคลังมาวางในกลุ่มนี้ หรือใช้ปุ่ม “แชร์”</p>
+            <div id="groupMembers" class="group-members"></div>
+            <div id="groupSongList" class="group-song-list" aria-live="polite"></div>
+          </section>
+          <section id="personalLibraryDropZone" class="personal-library-drop-zone" aria-label="เพลงของฉัน">
+            <p id="libraryDropHint" class="library-drop-hint" hidden>ลากเพลงจากกลุ่มมาวางที่รายการนี้เพื่อคัดลอกเข้าเพลงของฉัน · ต้นฉบับในกลุ่มจะไม่เปลี่ยน</p>
+            <div id="songList" class="song-list" aria-live="polite"></div>
+            <div id="emptyState" class="empty-state" hidden>
+              <div class="empty-icon">♫</div>
+              <h2>เริ่มทำสมุดเพลงของคุณ</h2>
+              <p>เพิ่มเพลง พิมพ์เนื้อเพลงและคอร์ด แล้วเรียงลำดับตามชุดนมัสการ</p>
+              <button class="primary-button" id="emptyNewSongButton">＋ เพิ่มเพลงแรก</button>
+            </div>
+          </section>
+          <p class="privacy-note">เพลงส่วนตัวและเพลงวันนี้แยกตามบัญชี · เมื่อออฟไลน์จะแก้สำเนาในเครื่องและซิงก์เมื่อเชื่อมต่อได้</p>
+        </section>
+
+        <section id="editorView" class="editor-layout" hidden>
+          <div class="editor-heading">
+            <button class="back-button" id="backButton">← <span>เพลงของฉัน</span></button>
+            <div class="editor-heading-actions">
+              <button class="primary-button" id="saveSongButton">บันทึกเพลง</button>
+            </div>
+          </div>
+          <div class="editor-grid">
+            <aside class="editor-panel">
+              <p class="eyebrow">รายละเอียดเพลง</p>
+              <label class="field-label">ชื่อเพลง<input id="songTitle" placeholder="เช่น พระองค์ทรงสมควร" /></label>
+              <label class="field-label">ศิลปิน / ผู้แต่ง<input id="songArtist" placeholder="ระบุถ้าทราบ" /></label>
+              <label class="field-label">คีย์ต้นฉบับ <select id="sourceKeySelect" aria-label="เลือกคีย์ต้นฉบับ"></select><span class="hint">เลือกคีย์ที่ตรงกับคอร์ดในเนื้อเพลง</span></label>
+              <label class="field-label chord-editor-label">เนื้อเพลงและคอร์ด
+                <span class="hint">ใช้คอร์ดแบบ <code>[G]</code> หรือวางคอร์ดเดี่ยวเป็นแถว เช่น <code>G C</code> ก็ได้ ระบบจะเปลี่ยนคีย์โดยคงเนื้อไทยไว้</span>
+                <textarea id="chordText" rows="16" spellcheck="false" placeholder="[Intro] [G] [D] [Em] [C]\n\n[Verse 1]\n[G]ใส่เนื้อเพลงตรงนี้ [D]\n[Em]และวางคอร์ดไว้ในวงเล็บ [C]\n\n[Chorus]\n[G]ร้องท่อนฮุคตรงนี้ [D]"></textarea>
+              </label>
+              <details class="help-details"><summary>วิธีกรอกคอร์ด</summary><p>พิมพ์หรือวางเนื้อเพลงพร้อมคอร์ดลงในช่องนี้ได้เลย ใช้รูปแบบคอร์ดในวงเล็บ เช่น <code>[G]</code> หรือวางคอร์ดเป็นแถว เช่น <code>G C</code></p></details>
+            </aside>
+
+            <section class="preview-panel">
+              <div class="preview-toolbar">
+                <div class="preview-label"><span class="live-dot"></span> แสดงตัวอย่าง</div>
+                <div class="reader-controls">
+                  <label class="key-control">แสดงคีย์ <select id="keySelect" aria-label="เลือกคีย์ที่แสดง"></select></label>
+                  <label class="spacing-control" title="ปรับขนาดตัวอักษร"><span>ก</span><input id="fontSizeRange" type="range" min="12" max="22" value="16" /><span class="large-a">ก</span></label>
+                  <label class="line-control" title="ปรับระยะห่างบรรทัด">บรรทัด <input id="lineSpacingRange" type="range" min="12" max="21" value="16" /></label>
+                </div>
+              </div>
+              <div id="songPreview" class="song-preview"><div class="preview-placeholder">เพิ่มเนื้อเพลงและคอร์ดเพื่อดูตัวอย่าง</div></div>
+              <div class="preview-footer"><span>เปลี่ยนคีย์ได้โดยไม่แก้คอร์ดต้นฉบับ</span></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="readerView" class="reader-view" hidden>
+          <div class="reader-topbar"><button id="readerBackButton" class="back-button">← <span>รายการเพลง</span></button><div class="reader-nav"><button id="readerPrevButton" class="quiet-button" aria-label="เพลงก่อนหน้า">← ก่อนหน้า</button><span id="readerSetPosition" class="reader-position"></span><button id="readerNextButton" class="quiet-button" aria-label="เพลงถัดไป">ถัดไป →</button></div><div class="reader-top-actions"><button id="readerQueueToggle" class="quiet-button reader-queue-toggle" aria-expanded="false" aria-controls="readerSetlist">เพลงในชุด</button><button id="readerEditButton" class="quiet-button">แก้ไข</button></div></div>
+          <div class="reader-layout">
+            <aside id="readerSetlist" class="reader-queue" aria-label="รายการเพลงในชุด">
+              <div class="reader-queue-heading"><span class="eyebrow">SETLIST</span><strong id="readerQueueSummary">รายการเพลง</strong></div>
+              <ol id="readerQueue" class="reader-queue-list" aria-label="เพลงทั้งหมดในชุด"></ol>
+            </aside>
+          <div class="reader-card">
+            <div class="reader-song-heading"><div><p class="eyebrow" id="readerArtist"></p><h1 id="readerTitle"></h1></div><div class="reader-tools"><label class="key-control"><span id="readerKeyLabel">คีย์แสดงผล</span><select id="readerKeySelect" aria-label="เลือกคีย์แสดงผล"></select></label><button id="readerSourceKeyButton" class="quiet-button" title="กลับไปคีย์ต้นฉบับ">คีย์ต้นฉบับ</button><label class="spacing-control"><span>ก</span><input id="readerFontSize" type="range" min="14" max="28" value="20" /><span class="large-a">ก</span></label><label class="line-control">บรรทัด <input id="readerLineSpacing" type="range" min="12" max="21" value="17" /></label></div></div>
+            <p id="readerKeyScopeHint" class="reader-key-scope-hint" role="status"></p>
+            <div id="readerChords" class="reader-chords"></div>
+          </div>
+          </div>
+        </section>
+      </main>
+      <div id="toast" class="toast" role="status" aria-live="polite"></div>
+      <dialog id="accountDialog" class="app-dialog">
+        <div class="dialog-heading"><h2 id="accountDialogHeading">เข้าสู่ระบบ</h2><button type="button" class="icon-button" data-close-dialog="accountDialog" aria-label="ปิด">×</button></div>
+        <form id="accountForm" class="dialog-form">
+          <label id="displayNameField" class="field-label" hidden>ชื่อที่แสดง<input id="accountDisplayName" autocomplete="name" /></label>
+          <label class="field-label">อีเมล<input id="accountEmail" type="email" autocomplete="email" required /></label>
+          <label class="field-label">รหัสผ่าน<input id="accountPassword" type="password" autocomplete="current-password" minlength="10" required /><span class="hint">อย่างน้อย 10 ตัวอักษร</span></label>
+          <p id="accountError" class="dialog-error" hidden></p>
+          <button id="accountSubmitButton" class="primary-button" type="submit">เข้าสู่ระบบ</button>
+          <button id="accountModeButton" class="text-button" type="button">ยังไม่มีบัญชี? สมัครสมาชิก</button>
+          <button id="forgotPasswordButton" class="text-button" type="button">ลืมรหัสผ่าน?</button>
+        </form>
+        <div id="signedInPanel" class="signed-in-panel" hidden><p id="signedInLabel"></p><p>ข้อมูลกลุ่มและเพลงที่แชร์จะอัปเดตขณะเปิดเว็บ</p><p id="accountPublicId" class="public-id-box"></p><button id="copyPublicIdButton" type="button" class="quiet-button">คัดลอก ID</button><button id="generateRecoveryCodeButton" type="button" class="quiet-button">สร้างรหัสกู้บัญชี</button><button id="logoutButton" type="button" class="quiet-button">ออกจากระบบ</button></div>
+      </dialog>
+      <dialog id="recoveryCodeDialog" class="app-dialog">
+        <div class="dialog-heading"><h2>บันทึกรหัสกู้บัญชี</h2></div>
+        <p>ระบบไม่มีอีเมลจริง จึงใช้รหัสนี้ตั้งรหัสผ่านใหม่ได้ เก็บไว้ในที่ปลอดภัย ระบบจะแสดงให้ดูครั้งเดียว</p>
+        <code id="recoveryCodeValue" class="recovery-code-value"></code>
+        <div class="dialog-actions"><button id="copyRecoveryCodeButton" class="quiet-button" type="button">คัดลอกรหัส</button><button id="recoveryCodeDoneButton" class="primary-button" type="button">บันทึกแล้ว</button></div>
+      </dialog>
+      <dialog id="resetPasswordDialog" class="app-dialog">
+        <div class="dialog-heading"><h2>ตั้งรหัสผ่านใหม่</h2><button type="button" class="icon-button" data-close-dialog="resetPasswordDialog" aria-label="ปิด">×</button></div>
+        <form id="resetPasswordForm" class="dialog-form">
+          <label class="field-label">อีเมลบัญชี<input id="resetEmail" type="email" autocomplete="username" required /></label>
+          <label class="field-label">Recovery code<input id="resetRecoveryCode" autocomplete="off" required /><span class="hint">ใส่รหัสกู้บัญชีที่บันทึกไว้ตอนสมัคร</span></label>
+          <label class="field-label">รหัสผ่านใหม่<input id="resetNewPassword" type="password" minlength="10" autocomplete="new-password" required /></label>
+          <p id="resetPasswordError" class="dialog-error" hidden></p>
+          <button class="primary-button" type="submit">เปลี่ยนรหัสผ่าน</button>
+        </form>
+      </dialog>
+      <dialog id="inboxDialog" class="app-dialog">
+        <div class="dialog-heading"><h2>กล่องแจ้งเตือน</h2><button type="button" class="icon-button" data-close-dialog="inboxDialog" aria-label="ปิด">×</button></div>
+        <div id="notificationList" class="notification-list"></div>
+        <p id="notificationEmpty" class="group-empty" hidden>ยังไม่มีการแจ้งเตือน</p>
+      </dialog>
+      <dialog id="inviteDialog" class="app-dialog">
+        <div class="dialog-heading"><h2>เชิญเข้ากลุ่ม</h2><button type="button" class="icon-button" data-close-dialog="inviteDialog" aria-label="ปิด">×</button></div>
+        <form id="inviteForm" class="dialog-form">
+          <label class="field-label">ค้นหาด้วยชื่อหรือ ID<input id="inviteSearch" autocomplete="off" placeholder="เช่น มานะ หรือ WC-12AB34" required /></label>
+          <input id="invitePublicId" type="hidden" />
+          <div id="inviteSearchResults" class="invite-search-results" hidden></div>
+          <label class="field-label">สิทธิ์<select id="inviteRole"><option value="viewer">ดูเพลงอย่างเดียว</option><option value="editor">แก้ไขเพลงและลำดับได้</option></select></label>
+          <p id="inviteRoleHint" class="hint">ผู้ดูเชิญได้เฉพาะผู้ดู · เจ้าของหรือผู้แก้ไขเลือกผู้ดูหรือผู้แก้ไขได้</p>
+          <p class="hint">เลือกบัญชีจากผลค้นหาเพื่อส่งคำเชิญ · ไม่แสดงอีเมลสมาชิก</p>
+          <p id="inviteError" class="dialog-error" hidden></p>
+          <button class="primary-button" type="submit">ส่งคำเชิญ</button>
+        </form>
+      </dialog>
+      <dialog id="syncConflictDialog" class="app-dialog sync-conflict-dialog">
+        <div class="dialog-heading"><h2 id="syncConflictTitle">พบเพลงที่แก้จากอุปกรณ์อื่น</h2></div>
+        <p id="syncConflictSummary" class="sync-conflict-summary"></p>
+        <div class="sync-conflict-actions">
+          <button id="syncConflictCloud" class="quiet-button" type="button">ใช้ฉบับคลาวด์</button>
+          <button id="syncConflictOffline" class="primary-button" type="button">ใช้ฉบับในเครื่อง</button>
+          <button id="syncConflictBoth" class="quiet-button" type="button">เก็บทั้งสองฉบับ</button>
+        </div>
+      </dialog>
+    </div>
+    <script src="/app.js?v=account-recovery-and-public-id-1" defer></script>
+  </body>
+</html>
