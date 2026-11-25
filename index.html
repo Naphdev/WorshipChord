@@ -28,8 +28,8 @@
           <div class="library-heading">
             <div>
               <p class="eyebrow">WORSHIP SET</p>
-              <h1>เพลงของฉัน</h1>
-              <p class="subheading">จัดลำดับเพลง แล้วเปิดดูคอร์ดระหว่างเล่นจริง</p>
+              <h1>สมุดเพลง</h1>
+              <p class="subheading">เลือกเพลงวันนี้ จัดชุดกลุ่ม หรือจัดการคลังส่วนตัว</p>
             </div>
             <span class="local-badge"><span></span> <span id="localBadgeText">เข้าสู่ระบบเพื่อดูเพลง</span></span>
           </div>
@@ -44,6 +44,11 @@
             <label class="search-box"><span aria-hidden="true">⌕</span><input id="searchInput" type="search" placeholder="ค้นหาชื่อเพลง ศิลปิน เนื้อร้อง หรือคอร์ด" aria-describedby="searchHelp" /></label>
           </div>
           <p id="searchHelp" class="search-help">ค้นหาได้จากชื่อเพลง ศิลปิน เนื้อร้อง หรือคอร์ด</p>
+          <nav class="main-view-tabs" role="tablist" aria-label="ส่วนของสมุดเพลง">
+            <button type="button" role="tab" id="tabToday" aria-controls="todaySetlistPanel" aria-selected="true" data-main-tab="today"><strong>เพลงวันนี้</strong><small>เห็นได้เฉพาะคุณ</small></button>
+            <button type="button" role="tab" id="tabGroup" aria-controls="groupPanel" aria-selected="false" data-main-tab="group"><strong>ชุดเพลงกลุ่ม</strong><small>เห็นร่วมกันในกลุ่มที่เลือก</small></button>
+            <button type="button" role="tab" id="tabPersonal" aria-controls="personalLibraryDropZone" aria-selected="false" data-main-tab="personal"><strong>คลังส่วนตัว</strong><small>เห็นได้เฉพาะคุณ</small></button>
+          </nav>
           <div id="searchResults" class="search-results" aria-live="polite" hidden></div>
           <section id="todaySetlistPanel" class="today-panel" aria-labelledby="todayHeading">
             <div class="today-heading">
@@ -51,23 +56,59 @@
               <span id="todaySongCount" class="today-count">0 เพลง</span>
             </div>
             <div id="todaySongList" class="today-song-list drop-target" aria-live="polite" aria-label="ลำดับเพลงวันนี้"></div>
+            <div id="todaySongsPager" class="song-pagination"></div>
             <p id="todaySetlistEmpty" class="today-empty">กด “+ วันนี้” ที่เพลง หรือ ลากเพลงจากคลังมาวางที่นี่</p>
           </section>
           <section id="groupPanel" class="group-panel" hidden aria-labelledby="groupHeading">
             <div class="group-heading">
               <div><p class="eyebrow">SHARED WORSHIP SET</p><h2 id="groupHeading">กลุ่มเพลง</h2></div>
-              <div class="group-tools"><select id="groupSelect" aria-label="เลือกกลุ่มเพลง"></select><button class="quiet-button" id="prepareOfflineGroupButton" disabled aria-describedby="groupOfflineHelp" title="บันทึกสำเนาเพลงกลุ่มลงอุปกรณ์นี้ เพื่อเปิดดูได้เมื่อไม่มีอินเทอร์เน็ต">บันทึกไว้ดูออฟไลน์</button><button class="quiet-button" id="createGroupButton">＋ สร้างกลุ่ม</button><button class="quiet-button" id="addGroupSongButton" hidden>＋ เพิ่มเพลงในกลุ่ม</button><button class="quiet-button" id="inviteGroupButton" disabled>เชิญสมาชิก</button></div>
+              <div class="group-tools"><select id="groupSelect" aria-label="เลือกกลุ่มเพลง"></select><button class="quiet-button" id="prepareOfflineGroupButton" disabled aria-describedby="groupOfflineHelp" title="บันทึกสำเนาเพลงกลุ่มลงอุปกรณ์นี้ เพื่อเปิดดูได้เมื่อไม่มีอินเทอร์เน็ต">บันทึกไว้ดูออฟไลน์</button><button class="quiet-button" id="manageGroupButton" hidden>ตั้งค่ากลุ่ม</button><button class="quiet-button" id="createGroupButton">＋ สร้างกลุ่ม</button><button class="quiet-button" id="inviteGroupButton" disabled>เชิญสมาชิก</button></div>
+            </div>
+            <div id="weeklySetTools" class="weekly-set-tools" hidden>
+              <label>ชุดที่เปิดอยู่<select id="weeklySetSelect" aria-label="เลือกชุดเพลงตามวันที่เล่น"></select></label>
+              <details id="createWeeklySetDetails" class="create-weekly-set"><summary>＋ สร้างชุดสำหรับสัปดาห์ใหม่</summary>
+                <p>เลือกวันที่เล่น แล้วเลือกว่าจะคัดลอกเพลงจากชุดที่เปิดอยู่หรือเริ่มจากชุดว่าง · หนึ่งชุดต่อสัปดาห์</p>
+                <label>วันที่ใช้เล่นชุดใหม่<input id="weeklyServiceDate" type="date" aria-label="วันที่ใช้เล่นชุดใหม่" /></label>
+                <p id="weeklyCreateDateHint" class="hint"></p>
+                <div class="create-weekly-actions"><button id="createWeeklySetButton" class="quiet-button" type="button">คัดลอกรายการเพลงชุดนี้</button><button id="createEmptyWeeklySetButton" class="quiet-button" type="button">เริ่มชุดว่าง</button></div>
+              </details>
             </div>
             <p id="groupOfflineHelp" class="group-offline-help" hidden></p>
             <p id="groupOfflineStatus" class="group-offline-status" role="status" hidden></p>
             <p id="groupEmptyState" class="group-empty">สร้างกลุ่มเพื่อแชร์เพลงและลำดับเพลงกับทีมแบบเรียลไทม์</p>
-            <p id="groupDropHint" class="group-drop-hint" hidden>ลากเพลงจากคลังมาวางในกลุ่มนี้ หรือใช้ปุ่ม “แชร์”</p>
+            <p id="groupDropHint" class="group-drop-hint" hidden>ลากเพลงจากคลังส่วนตัวมาวาง เพื่อเพิ่มเพลงเข้าคลังกลุ่ม</p>
             <div id="groupMembers" class="group-members"></div>
+            <div class="weekly-songs-heading"><div><h3 id="weeklySetHeading" class="group-list-heading">เพลงในชุดสัปดาห์นี้</h3><button id="editWeeklyServiceDateButton" class="text-button" type="button" hidden>เปลี่ยนวันเล่น</button></div><button id="addGroupSongButton" class="primary-button" type="button" hidden>＋ เพิ่มเพลง</button></div>
             <div id="groupSongList" class="group-song-list" aria-live="polite"></div>
+            <div id="groupSongsPager" class="song-pagination"></div>
+            <details id="groupLibraryDetails" class="group-library-panel">
+              <summary>คลังเพลงกลุ่ม <span id="groupLibraryCount">0 เพลง</span></summary>
+              <p>เพลงที่เก็บไว้ใช้ซ้ำได้ · การแก้คลังนี้ไม่เปลี่ยนชุดที่บันทึกไว้แล้ว</p>
+              <label class="search-box"><span aria-hidden="true">⌕</span><input id="groupLibrarySearch" type="search" placeholder="ค้นเพลงในคลังกลุ่ม" /></label>
+              <div id="groupLibraryList" class="group-song-list" aria-live="polite"></div>
+              <div id="groupLibraryPager" class="song-pagination"></div>
+            </details>
+            <details id="groupSuggestionDetails" class="group-suggestions-panel" hidden>
+              <summary>เพลงที่สมาชิกเสนอ <span id="groupSuggestionCount">0 เพลง</span></summary>
+              <p>ตรวจคอร์ดและคีย์ต้นฉบับก่อนเพิ่มเข้าคลังเพลงกลุ่ม</p>
+              <div id="groupSuggestionList" class="group-song-list"></div>
+            </details>
+            <dialog id="groupSongPickerDialog" class="app-dialog">
+              <div class="dialog-heading"><div><h2>เพิ่มเพลงในชุดนี้</h2><p id="groupSongPickerWeek" class="hint"></p></div><button type="button" class="icon-button" data-close-dialog="groupSongPickerDialog" aria-label="ปิด">×</button></div>
+              <div class="song-picker-sources" role="tablist" aria-label="เลือกคลังเพลง">
+                <button type="button" role="tab" aria-selected="true" data-picker-source="group">คลังเพลงกลุ่ม</button>
+                <button type="button" role="tab" aria-selected="false" data-picker-source="personal">เพลงของฉัน</button>
+              </div>
+              <p id="groupSongPickerHelp" class="hint">เลือกเพลงที่แชร์ไว้ในคลังกลุ่ม เพื่อเพิ่มลงชุดนี้</p>
+              <label class="search-box"><span aria-hidden="true">⌕</span><input id="groupSongPickerSearch" type="search" placeholder="ค้นเพลงในคลังกลุ่ม" /></label>
+              <p id="groupSongPickerEmpty" class="group-empty" hidden></p><div id="groupSongPickerList" class="group-song-list"></div>
+            </dialog>
           </section>
           <section id="personalLibraryDropZone" class="personal-library-drop-zone" aria-label="เพลงของฉัน">
+            <div class="personal-library-heading"><div><h2>คลังส่วนตัว</h2><p>เห็นได้เฉพาะคุณ</p></div></div>
             <p id="libraryDropHint" class="library-drop-hint" hidden>ลากเพลงจากกลุ่มมาวางที่รายการนี้เพื่อคัดลอกเข้าเพลงของฉัน · ต้นฉบับในกลุ่มจะไม่เปลี่ยน</p>
             <div id="songList" class="song-list" aria-live="polite"></div>
+            <div id="personalSongsPager" class="song-pagination"></div>
             <div id="emptyState" class="empty-state" hidden>
               <div class="empty-icon">♫</div>
               <h2>เริ่มทำสมุดเพลงของคุณ</h2>
@@ -90,10 +131,10 @@
               <p class="eyebrow">รายละเอียดเพลง</p>
               <label class="field-label">ชื่อเพลง<input id="songTitle" placeholder="เช่น พระองค์ทรงสมควร" /></label>
               <label class="field-label">ศิลปิน / ผู้แต่ง<input id="songArtist" placeholder="ระบุถ้าทราบ" /></label>
-              <label class="field-label">คีย์ต้นฉบับ <select id="sourceKeySelect" aria-label="เลือกคีย์ต้นฉบับ"></select><span class="hint">เลือกคีย์ที่ตรงกับคอร์ดในเนื้อเพลง</span></label>
+              <div class="field-label"><label for="sourceKeySelect">คีย์ต้นฉบับ</label><select id="sourceKeySelect" aria-label="เลือกคีย์ต้นฉบับ"></select><span id="sourceKeyStatus" class="hint">ตรวจให้ตรงกับคอร์ดในเนื้อเพลงก่อนยืนยัน</span><span id="sourceKeySuggestion" class="key-suggestion" hidden></span><button id="applyKeySuggestionButton" class="quiet-button key-suggestion-button" type="button" hidden>ใช้คีย์ที่แนะนำ</button><button id="confirmSourceKeyButton" class="quiet-button key-confirm-button" type="button">ยืนยันคีย์ต้นฉบับ</button></div>
               <label class="field-label chord-editor-label">เนื้อเพลงและคอร์ด
                 <span class="hint">ใช้คอร์ดแบบ <code>[G]</code> หรือวางคอร์ดเดี่ยวเป็นแถว เช่น <code>G C</code> ก็ได้ ระบบจะเปลี่ยนคีย์โดยคงเนื้อไทยไว้</span>
-                <div class="format-tools"><button type="button" class="quiet-button" id="formatSpacingButton">จัดช่องไฟ</button><button type="button" class="quiet-button" id="undoFormatButton" disabled>เลิกทำ</button><span class="hint">จัดช่องว่างซ้ำและบรรทัดว่าง โดยคงเนื้อร้องกับคอร์ดไว้</span></div>
+                <div class="format-tools"><button type="button" class="quiet-button" id="formatSpacingButton">จัดช่องว่างบรรทัด</button><button type="button" class="quiet-button" id="undoFormatButton" disabled>เลิกทำ</button><span class="hint">จัดช่องว่างซ้ำและบรรทัดว่าง โดยคงเนื้อร้องกับคอร์ดไว้</span></div>
                 <textarea id="chordText" rows="16" spellcheck="false" placeholder="[Intro] [G] [D] [Em] [C]\n\n[Verse 1]\n[G]ใส่เนื้อเพลงตรงนี้ [D]\n[Em]และวางคอร์ดไว้ในวงเล็บ [C]\n\n[Chorus]\n[G]ร้องท่อนฮุคตรงนี้ [D]"></textarea>
               </label>
               <details class="help-details"><summary>วิธีกรอกคอร์ด</summary><p>พิมพ์หรือวางเนื้อเพลงพร้อมคอร์ดลงในช่องนี้ได้เลย ใช้รูปแบบคอร์ดในวงเล็บ เช่น <code>[G]</code> หรือวางคอร์ดเป็นแถว เช่น <code>G C</code></p></details>
@@ -126,6 +167,7 @@
           <div class="reader-card">
             <div class="reader-song-heading"><div><p class="eyebrow" id="readerArtist"></p><h1 id="readerTitle"></h1></div><div class="reader-tools"><label class="key-control"><span id="readerKeyLabel">คีย์แสดงผล</span><select id="readerKeySelect" aria-label="เลือกคีย์แสดงผล"></select></label><button id="readerSourceKeyButton" class="quiet-button" title="กลับไปคีย์ต้นฉบับ">คีย์ต้นฉบับ</button><button id="readerFitButton" class="quiet-button" aria-pressed="false" title="ลดขนาดตัวอักษรและระยะห่าง เพื่อให้เห็นเนื้อหาได้มากขึ้น">จัดรูปแบบ</button><button id="readerColumnsButton" class="quiet-button" aria-pressed="false">สองคอลัมน์</button><label class="spacing-control"><span>ก</span><input id="readerFontSize" type="range" min="14" max="28" value="20" /><span class="large-a">ก</span></label><label class="line-control">บรรทัด <input id="readerLineSpacing" type="range" min="12" max="21" value="17" /></label></div></div>
             <p id="readerKeyScopeHint" class="reader-key-scope-hint" role="status"></p>
+            <p id="readerSourceKeyWarning" class="key-warning" role="status" hidden>คีย์ต้นฉบับยังไม่ยืนยัน · หากเปลี่ยนคีย์แล้วคอร์ดเพี้ยน ให้ผู้แก้ไขตรวจคีย์ในคลังเพลงกลุ่ม</p>
             <div id="readerChords" class="reader-chords"></div>
           </div>
           </div>
@@ -144,6 +186,10 @@
           <button id="forgotPasswordButton" class="text-button" type="button">ลืมรหัสผ่าน?</button>
         </form>
         <div id="signedInPanel" class="signed-in-panel" hidden><p id="signedInLabel"></p><p>ข้อมูลกลุ่มและเพลงที่แชร์จะอัปเดตขณะเปิดเว็บ</p><p id="accountPublicId" class="public-id-box"></p><button id="copyPublicIdButton" type="button" class="quiet-button">คัดลอก ID</button><button id="generateRecoveryCodeButton" type="button" class="quiet-button">สร้างรหัสกู้บัญชี</button><button id="logoutButton" type="button" class="quiet-button">ออกจากระบบ</button></div>
+      </dialog>
+      <dialog id="editServiceDateDialog" class="app-dialog">
+        <div class="dialog-heading"><div><h2>เปลี่ยนวันเล่น</h2><p id="editServiceDateWeek" class="hint"></p></div><button type="button" class="icon-button" data-close-dialog="editServiceDateDialog" aria-label="ปิด">×</button></div>
+        <form id="editServiceDateForm" class="dialog-form"><label class="field-label">วันที่เล่น<input id="editServiceDateInput" type="date" required /></label><p id="editServiceDateError" class="dialog-error" hidden></p><div class="dialog-actions"><button type="button" class="quiet-button" data-close-dialog="editServiceDateDialog">ยกเลิก</button><button type="submit" class="primary-button">บันทึกวันเล่น</button></div></form>
       </dialog>
       <dialog id="recoveryCodeDialog" class="app-dialog">
         <div class="dialog-heading"><h2>บันทึกรหัสกู้บัญชี</h2></div>
@@ -201,7 +247,21 @@
         <p class="hint">เพลงจะถูกเพิ่มในบัญชีนี้ ส่วนเพลงชื่อและศิลปินซ้ำจะข้ามให้อัตโนมัติ</p>
         <div class="dialog-actions"><button type="button" class="quiet-button" data-close-dialog="importPreviewDialog">ยกเลิก</button><button type="button" class="primary-button" id="confirmImportButton">นำเข้าเพลง</button></div>
       </dialog>
+      <dialog id="groupSettingsDialog" class="app-dialog">
+        <div class="dialog-heading"><div><h2 id="groupSettingsTitle">ตั้งค่ากลุ่ม</h2><p id="groupSettingsHelp" class="hint"></p></div><button type="button" class="icon-button" data-close-dialog="groupSettingsDialog" aria-label="ปิด">×</button></div>
+        <form id="groupNameForm" class="dialog-form">
+          <label class="field-label">ชื่อกลุ่ม<input id="groupNameInput" maxlength="80" minlength="2" required /></label>
+          <p id="groupSettingsError" class="dialog-error" hidden></p>
+          <button id="saveGroupNameButton" class="primary-button" type="submit">บันทึกชื่อ</button>
+        </form>
+        <div class="group-danger-zone"><strong>ลบกลุ่ม</strong><p>ลบกลุ่มและเพลงที่แชร์ไว้ สมาชิกจะไม่เห็นกลุ่มนี้อีก การลบย้อนกลับไม่ได้</p><button id="deleteGroupButton" class="danger-button" type="button">ลบกลุ่มนี้</button></div>
+      </dialog>
+      <dialog id="confirmDialog" class="app-dialog confirm-dialog">
+        <div class="dialog-heading"><h2 id="confirmTitle"></h2><button type="button" class="icon-button" data-close-dialog="confirmDialog" aria-label="ปิด">×</button></div>
+        <p id="confirmMessage" class="confirm-message"></p>
+        <div class="dialog-actions"><button id="confirmCancelButton" type="button" class="quiet-button">ยกเลิก</button><button id="confirmAcceptButton" type="button" class="primary-button">ยืนยัน</button></div>
+      </dialog>
     </div>
-    <script src="/app.js?v=account-recovery-and-public-id-1" defer></script>
+    <script src="/app.js?v=clear-weekly-set-creation-1" defer></script>
   </body>
 </html>

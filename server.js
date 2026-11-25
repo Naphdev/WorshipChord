@@ -125,8 +125,18 @@ function publicSong(song) {
 }
 
 function publicGroup(group) {
-  const { _id, ownerId, members, songIds, ...fields } = group;
-  return { ...fields, id: _id.toString(), ownerId: ownerId.toString(), songIds: (songIds || []).map((id) => id.toString()), members: (members || []).map((member) => ({ ...member, userId: member.userId.toString() })) };
+  const { _id, ownerId, members, songIds, librarySongIds, weeklySets = [], activeSetId, ...fields } = group;
+  return { ...fields, id: _id.toString(), ownerId: ownerId.toString(), songIds: (songIds || []).map((id) => id.toString()), librarySongIds: (librarySongIds || []).map((id) => id.toString()), weeklySets: weeklySets.map((set) => ({ ...set, id: set.id, songIds: (set.songIds || []).map((id) => id.toString()) })), activeSetId, members: (members || []).map((member) => ({ ...member, userId: member.userId.toString() })) };
+}
+
+function currentWeekRange(date = new Date()) {
+  const bangkok = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+  const start = new Date(Date.UTC(bangkok.getUTCFullYear(), bangkok.getUTCMonth(), bangkok.getUTCDate()));
+  const weekday = (start.getUTCDay() + 6) % 7;
+  start.setUTCDate(start.getUTCDate() - weekday);
+  const end = new Date(start); end.setUTCDate(end.getUTCDate() + 6);
+  const iso = (value) => value.toISOString().slice(0, 10);
+  return { start: iso(start), end: iso(end) };
 }
 
 async function readJson(req) {
@@ -210,6 +220,7 @@ function safeSongInput(input = {}) {
     youtubeUrl: String(input.youtubeUrl || '').trim().slice(0, 500),
     chordUrl: String(input.chordUrl || '').trim().slice(0, 500),
     key,
+    sourceKeyConfirmed: input.sourceKeyConfirmed === true,
     text: String(input.text || '').slice(0, 120000)
   };
 }
@@ -557,7 +568,9 @@ async function handleApi(req, res, url) {
     const body = await readJson(req);
     const name = String(body.name || '').trim().slice(0, 80);
     if (name.length < 2) throw new HttpError(400, 'Group name must have at least 2 characters.');
-    const group = { name, ownerId: user._id, members: [{ userId: user._id, email: user.email, displayName: user.displayName || user.email.split('@')[0], role: 'owner', joinedAt: new Date() }], songIds: [], createdAt: new Date(), updatedAt: new Date() };
+    const range = currentWeekRange();
+    const firstSet = { id: randomBytes(8).toString('hex'), ...range, name: `สัปดาห์ ${range.start}–${range.end}`, songIds: [], createdAt: new Date(), updatedAt: new Date() };
+    const group = { name, ownerId: user._id, members: [{ userId: user._id, email: user.email, displayName: user.displayName || user.email.split('@')[0], role: 'owner', joinedAt: new Date() }], songIds: [], librarySongIds: [], weeklySets: [firstSet], activeSetId: firstSet.id, createdAt: new Date(), updatedAt: new Date() };
     await database.collection('groups').insertOne(group);
     notifyUser(user._id, { type: 'groups.changed' });
     return json(res, 201, { group: publicGroup(group) });
@@ -590,6 +603,28 @@ async function handleApi(req, res, url) {
   if (pathParts[1] === 'groups' && pathParts[2]) {
     const groupId = pathParts[2];
     const { group, member } = await requireGroup(groupId, user._id);
+    if (pathParts.length === 3 && method === 'PATCH') {
+      if (member.role !== 'owner') throw new HttpError(403, 'Only the group owner can rename this group.');
+      const body = await readJson(req);
+      const name = String(body.name || '').trim().slice(0, 80);
+      if (name.length < 2) throw new HttpError(400, 'Group name must have at least 2 characters.');
+      const updated = { ...group, name, updatedAt: new Date() };
+      await database.collection('groups').updateOne({ _id: group._id }, { $set: { name, updatedAt: updated.updatedAt } });
+      await database.collection('invitations').updateMany({ groupId: group._id, status: 'pending' }, { $set: { groupName: name } });
+      await database.collection('notifications').updateMany({ groupId: group._id, type: 'group_invite' }, { $set: { groupName: name } });
+      notifyGroup(updated, { type: 'group.changed', groupId: group._id.toString(), change: 'group_renamed' });
+      for (const item of group.members) notifyUser(item.userId, { type: 'groups.changed' });
+      return json(res, 200, { group: publicGroup(updated) });
+    }
+    if (pathParts.length === 3 && method === 'DELETE') {
+      if (member.role !== 'owner') throw new HttpError(403, 'Only the group owner can delete this group.');
+      await database.collection('groupSongs').deleteMany({ groupId: group._id });
+      await database.collection('invitations').deleteMany({ groupId: group._id });
+      await database.collection('groups').deleteOne({ _id: group._id });
+      notifyGroup(group, { type: 'group.changed', groupId: group._id.toString(), change: 'group_deleted' });
+      for (const item of group.members) notifyUser(item.userId, { type: 'groups.changed' });
+      return json(res, 200, { ok: true });
+    }
     if (pathParts[3] === 'members' && method === 'GET') {
       const query = String(url.searchParams.get('q') || '').trim().slice(0, 80).toLocaleLowerCase('th-TH');
       const requestedRole = String(url.searchParams.get('role') || '');
@@ -608,11 +643,132 @@ async function handleApi(req, res, url) {
       }));
       return json(res, 200, { members, total: filtered.length, offset, limit });
     }
+    if (pathParts[3] === 'suggestions' && pathParts.length === 4 && method === 'POST') {
+      const body = await readJson(req);
+      const fields = safeSongInput(body.song);
+      if (!fields.title) throw new HttpError(400, 'ใส่ชื่อเพลงก่อนเสนอ');
+      const pendingCount = await database.collection('groupSongSuggestions').countDocuments({ groupId: group._id, status: 'pending' });
+      if (pendingCount >= 500) throw new HttpError(409, 'คิวเสนอเพลงเต็มแล้ว แจ้งเจ้าของหรือผู้แก้ไขให้ตรวจรายการก่อน');
+      const pendingSuggestions = await database.collection('groupSongSuggestions').find({ groupId: group._id, status: 'pending' }, { projection: { song: 1 } }).toArray();
+      const duplicate = pendingSuggestions.find((item) => normalizeDuplicateField(item.song?.title) === normalizeDuplicateField(fields.title) && normalizeDuplicateField(item.song?.artist) === normalizeDuplicateField(fields.artist));
+      if (duplicate) throw new HttpError(409, 'มีเพลงนี้อยู่ในคิวเสนอแล้ว');
+      const suggestion = { groupId: group._id, song: { ...fields, sourceKeyConfirmed: false }, suggestedBy: user._id, suggestedByName: user.displayName || user.email.split('@')[0], status: 'pending', createdAt: new Date() };
+      await database.collection('groupSongSuggestions').insertOne(suggestion);
+      notifyGroup(group, { type: 'group.changed', groupId: group._id.toString(), change: 'song_suggestion' });
+      return json(res, 201, { ok: true });
+    }
+    if (pathParts[3] === 'suggestions' && pathParts.length === 4 && method === 'GET') {
+      requireEditor(member);
+      const suggestions = await database.collection('groupSongSuggestions').find({ groupId: group._id, status: 'pending' }).sort({ createdAt: 1 }).limit(100).toArray();
+      return json(res, 200, { suggestions: suggestions.map(({ _id, groupId, suggestedBy, ...item }) => ({ ...item, id: _id.toString(), suggestedBy: suggestedBy.toString() })) });
+    }
+    if (pathParts[3] === 'suggestions' && pathParts[4] && method === 'PATCH') {
+      requireEditor(member);
+      if (!ObjectId.isValid(pathParts[4])) throw new HttpError(400, 'Invalid suggestion id.');
+      const suggestionId = new ObjectId(pathParts[4]);
+      const body = await readJson(req);
+      const suggestion = await database.collection('groupSongSuggestions').findOne({ _id: suggestionId, groupId: group._id, status: 'pending' });
+      if (!suggestion) throw new HttpError(404, 'ไม่พบรายการเสนอเพลงนี้ หรือรายการถูกจัดการไปแล้ว');
+      if (body.action === 'reject') {
+        await database.collection('groupSongSuggestions').updateOne({ _id: suggestionId, groupId: group._id, status: 'pending' }, { $set: { status: 'rejected', reviewedBy: user._id, reviewedAt: new Date() } });
+        notifyGroup(group, { type: 'group.changed', groupId: group._id.toString(), change: 'song_suggestion' });
+        return json(res, 200, { ok: true });
+      }
+      if (body.action !== 'approve') throw new HttpError(400, 'เลือกว่าจะเพิ่มเพลงหรือปฏิเสธรายการ');
+      const allowedKeys = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+      if (!allowedKeys.includes(body.key) || body.confirmSourceKey !== true) throw new HttpError(400, 'ตรวจและยืนยันคีย์ต้นฉบับก่อนเพิ่มเพลง');
+      const fields = { ...safeSongInput(suggestion.song), key: body.key, sourceKeyConfirmed: true };
+      const groupSongs = await database.collection('groupSongs').find({ groupId: group._id }).toArray();
+      const duplicate = groupSongs.find((item) => normalizeDuplicateField(item.title) === normalizeDuplicateField(fields.title) && normalizeDuplicateField(item.artist) === normalizeDuplicateField(fields.artist));
+      let song = duplicate;
+      if (song) {
+        const corrected = { ...song, key: fields.key, displayKey: fields.key === song.key ? (song.displayKey || fields.key) : fields.key, sourceKeyConfirmed: true, revision: Number(song.revision || 1) + 1, updatedBy: user._id, updatedAt: new Date() };
+        const expectedRevision = song.revision === undefined ? { revision: { $exists: false } } : { revision: song.revision };
+        const result = await database.collection('groupSongs').replaceOne({ _id: song._id, groupId: group._id, ...expectedRevision }, corrected);
+        if (!result.matchedCount) throw new HttpError(409, 'เพลงในคลังถูกแก้จากอุปกรณ์อื่นแล้ว กรุณาโหลดใหม่');
+        song = corrected;
+      } else {
+        song = { ...fields, displayKey: fields.key, duplicateKey: duplicateSongKey(fields.title, fields.artist), groupId: group._id, revision: 1, updatedBy: user._id, updatedAt: new Date() };
+        try { await database.collection('groupSongs').insertOne(song); }
+        catch (error) {
+          if (error.code !== 11000) throw error;
+          song = await database.collection('groupSongs').findOne({ groupId: group._id, duplicateKey: duplicateSongKey(fields.title, fields.artist) });
+          if (!song) throw error;
+        }
+      }
+      await database.collection('groups').updateOne({ _id: group._id }, { $addToSet: { librarySongIds: song._id }, $set: { updatedAt: new Date() } });
+      const reviewed = await database.collection('groupSongSuggestions').updateOne({ _id: suggestionId, groupId: group._id, status: 'pending' }, { $set: { status: 'approved', linkedSongId: song._id, reviewedBy: user._id, reviewedAt: new Date(), reviewedKey: fields.key } });
+      if (!reviewed.modifiedCount) throw new HttpError(409, 'รายการนี้ถูกจัดการจากอุปกรณ์อื่นแล้ว');
+      notifyGroup(group, { type: 'group.changed', groupId: group._id.toString(), change: 'song_suggestion' });
+      return json(res, 200, { ok: true, song: publicSong(song) });
+    }
     if (pathParts.length === 3 && method === 'GET') {
-      const songIds = group.songIds || [];
-      const songs = await database.collection('groupSongs').find({ groupId: group._id, _id: { $in: songIds } }).toArray();
+      const querySetId = url.searchParams.get('setId');
+      const legacyIds = group.songIds || [];
+      const sets = group.weeklySets?.length ? group.weeklySets : [{ id: 'legacy', ...currentWeekRange(), name: 'ชุดปัจจุบัน', songIds: legacyIds }];
+      if (!group.weeklySets?.length) await database.collection('groups').updateOne({ _id: group._id, weeklySets: { $exists: false } }, { $set: { weeklySets: sets, activeSetId: 'legacy', librarySongIds: legacyIds } });
+      const selectedSet = sets.find((set) => set.id === querySetId) || sets.find((set) => set.id === group.activeSetId) || sets.at(-1);
+      const songIds = selectedSet.songIds || [];
+      let songSnapshots = { ...(selectedSet.songSnapshots || {}) };
+      const libraryIds = group.librarySongIds || legacyIds;
+      const songs = await database.collection('groupSongs').find({ groupId: group._id, _id: { $in: [...new Map([...libraryIds, ...songIds].map((id) => [id.toString(), id])).values()] } }).toArray();
       const ordered = new Map(songs.map((song) => [song._id.toString(), publicSong(song)]));
-      return json(res, 200, { group: publicGroup(group), songs: songIds.map((id) => ordered.get(id.toString())).filter(Boolean) });
+      let snapshotsChanged = false;
+      for (const id of songIds) {
+        const idString = id.toString();
+        if (!songSnapshots[idString] && ordered.has(idString)) {
+          songSnapshots[idString] = ordered.get(idString);
+          snapshotsChanged = true;
+        }
+      }
+      if (snapshotsChanged) await database.collection('groups').updateOne({ _id: group._id, 'weeklySets.id': selectedSet.id }, { $set: { 'weeklySets.$.songSnapshots': songSnapshots } });
+      const setSongs = songIds.map((id) => {
+        const idString = id.toString();
+        const base = ordered.get(idString) || songSnapshots[idString];
+        return base ? { ...base, ...(songSnapshots[idString] || {}), id: idString } : null;
+      }).filter(Boolean);
+      return json(res, 200, { group: publicGroup(group), activeSet: { ...selectedSet, songSnapshots }, librarySongs: libraryIds.map((id) => ordered.get(id.toString())).filter(Boolean), songs: setSongs });
+    }
+    if (pathParts[3] === 'sets' && pathParts.length === 5 && method === 'PATCH') {
+      requireEditor(member);
+      const setId = pathParts[4];
+      const set = group.weeklySets?.find((item) => item.id === setId);
+      if (!set) throw new HttpError(404, 'ไม่พบชุดเพลงนี้');
+      const body = await readJson(req);
+      const serviceDate = String(body.serviceDate || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(serviceDate) || Number.isNaN(Date.parse(`${serviceDate}T12:00:00Z`)) || new Date(`${serviceDate}T12:00:00Z`).toISOString().slice(0, 10) !== serviceDate) throw new HttpError(400, 'เลือกวันที่เล่นให้ถูกต้อง');
+      if (serviceDate < set.start || serviceDate > set.end) throw new HttpError(400, `เลือกวันที่ในสัปดาห์ ${set.start}–${set.end}`);
+      const updatedSet = { ...set, serviceDate, name: `ชุดวันที่ ${serviceDate}`, updatedAt: new Date() };
+      const result = await database.collection('groups').updateOne({ _id: group._id, 'weeklySets.id': setId }, { $set: { 'weeklySets.$.serviceDate': serviceDate, 'weeklySets.$.name': updatedSet.name, 'weeklySets.$.updatedAt': updatedSet.updatedAt, updatedAt: updatedSet.updatedAt } });
+      if (!result.matchedCount) throw new HttpError(404, 'ไม่พบชุดเพลงนี้');
+      const updatedGroup = { ...group, weeklySets: group.weeklySets.map((item) => item.id === setId ? updatedSet : item) };
+      notifyGroup(updatedGroup, { type: 'group.changed', groupId: group._id.toString(), change: 'set_date_changed', setId });
+      return json(res, 200, { activeSet: updatedSet, group: publicGroup(updatedGroup) });
+    }
+    if (pathParts[3] === 'sets' && pathParts.length === 4 && method === 'POST') {
+      requireEditor(member);
+      const body = await readJson(req);
+      const serviceDate = String(body.serviceDate || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(serviceDate) || Number.isNaN(Date.parse(`${serviceDate}T12:00:00Z`))) throw new HttpError(400, 'เลือกวันที่เล่นให้ถูกต้อง');
+      const range = currentWeekRange(new Date(`${serviceDate}T12:00:00Z`));
+      const sets = group.weeklySets || [];
+      const requestedDate = new Date(`${serviceDate}T12:00:00Z`);
+      if (requestedDate.toISOString().slice(0, 10) !== serviceDate) throw new HttpError(400, 'วันที่เล่นไม่ถูกต้อง');
+      if (sets.some((set) => set.start === range.start)) throw new HttpError(409, 'มีชุดเพลงในสัปดาห์นี้แล้ว กรุณาเลือกชุดเดิม');
+      const source = sets.find((set) => set.id === body.copyFrom) || sets.find((set) => set.id === group.activeSetId);
+      let songSnapshots = {};
+      if (body.copyPrevious && source) {
+        songSnapshots = structuredClone(source.songSnapshots || {});
+        if (!Object.keys(songSnapshots).length && source.songIds?.length) {
+          const sourceSongs = await database.collection('groupSongs').find({ groupId: group._id, _id: { $in: source.songIds } }).toArray();
+          songSnapshots = Object.fromEntries(sourceSongs.map((song) => [song._id.toString(), publicSong(song)]));
+        }
+      }
+      const newSet = { id: randomBytes(8).toString('hex'), ...range, serviceDate, name: `ชุดวันที่ ${serviceDate}`, songIds: body.copyPrevious && source ? [...source.songIds] : [], songSnapshots, createdAt: new Date(), updatedAt: new Date() };
+      await database.collection('groups').updateOne({ _id: group._id }, { $push: { weeklySets: newSet }, $set: { activeSetId: newSet.id, songIds: newSet.songIds, updatedAt: new Date() } });
+      const updated = { ...group, weeklySets: [...sets, newSet], activeSetId: newSet.id, songIds: newSet.songIds };
+      notifyGroup(updated, { type: 'group.changed', groupId: group._id.toString(), change: 'setlist' });
+      return json(res, 201, { group: publicGroup(updated), activeSet: newSet });
     }
     if (pathParts[3] === 'invitations' && method === 'POST') {
       const body = await readJson(req);
@@ -646,8 +802,24 @@ async function handleApi(req, res, url) {
       const uniqueIds = [...new Map(ids.map((id) => [id.toString(), id])).values()];
       const owned = uniqueIds.length ? await database.collection('groupSongs').countDocuments({ groupId: group._id, _id: { $in: uniqueIds } }) : 0;
       if (owned !== uniqueIds.length) throw new HttpError(400, 'Setlist contains a song outside this group.');
-      await database.collection('groups').updateOne({ _id: group._id }, { $set: { songIds: uniqueIds, updatedAt: new Date() } });
-      const updated = { ...group, songIds: uniqueIds, updatedAt: new Date() };
+      const setId = String(body.setId || group.activeSetId || 'legacy');
+      const sets = group.weeklySets?.length ? group.weeklySets : [{ id: 'legacy', ...currentWeekRange(), name: 'ชุดปัจจุบัน', songIds: group.songIds || [] }];
+      const selected = sets.find((set) => set.id === setId);
+      if (!selected) throw new HttpError(404, 'ไม่พบชุดเพลงสัปดาห์นี้');
+      const existingSnapshots = selected.songSnapshots || {};
+      const newIds = uniqueIds.filter((id) => !existingSnapshots[id.toString()]);
+      const newSongs = newIds.length ? await database.collection('groupSongs').find({ groupId: group._id, _id: { $in: newIds } }).toArray() : [];
+      const songSnapshots = Object.fromEntries(uniqueIds.map((id) => {
+        const idString = id.toString();
+        const song = existingSnapshots[idString] || newSongs.find((item) => item._id.equals(id));
+        return [idString, existingSnapshots[idString] || (song ? publicSong(song) : null)];
+      }).filter(([, song]) => song));
+      const updatedAt = new Date();
+      const setVersion = selected.updatedAt === undefined ? { updatedAt: { $exists: false } } : { updatedAt: selected.updatedAt };
+      const result = await database.collection('groups').updateOne({ _id: group._id, weeklySets: { $elemMatch: { id: setId, ...setVersion } } }, { $set: { 'weeklySets.$.songIds': uniqueIds, 'weeklySets.$.songSnapshots': songSnapshots, 'weeklySets.$.updatedAt': updatedAt, updatedAt, ...(group.activeSetId === setId ? { songIds: uniqueIds } : {}) } });
+      if (!result.modifiedCount) throw new HttpError(409, 'ชุดนี้มีการเปลี่ยนแปลงจากอุปกรณ์อื่น กรุณาโหลดชุดใหม่แล้วลองอีกครั้ง');
+      const updatedSets = sets.map((set) => set.id === setId ? { ...set, songIds: uniqueIds, songSnapshots, updatedAt } : set);
+      const updated = { ...group, weeklySets: updatedSets, songIds: group.activeSetId === setId ? uniqueIds : group.songIds, updatedAt: new Date() };
       notifyGroup(updated, { type: 'group.changed', groupId: group._id.toString(), change: 'setlist' });
       return json(res, 200, { group: publicGroup(updated) });
     }
@@ -680,9 +852,88 @@ async function handleApi(req, res, url) {
         if (error.code === 11000) throw new HttpError(409, `มีเพลง “${songFields.title}” ของศิลปินคนนี้อยู่ในกลุ่มแล้ว กรุณาตรวจสอบเพลงเดิมก่อนแชร์`);
         throw error;
       }
-      await database.collection('groups').updateOne({ _id: group._id }, { $push: { songIds: song._id }, $set: { updatedAt: new Date() } });
+      await database.collection('groups').updateOne({ _id: group._id }, { $addToSet: { librarySongIds: song._id }, $set: { updatedAt: new Date() } });
       notifyGroup(group, { type: 'group.changed', groupId: group._id.toString(), change: 'song_added' });
       return json(res, 201, { song: publicSong(song) });
+    }
+    if (pathParts[3] === 'sets' && pathParts.length === 7 && pathParts[5] === 'songs' && pathParts[6] === 'import' && method === 'POST') {
+      requireEditor(member);
+      const setId = pathParts[4];
+      const selectedSet = group.weeklySets?.find((item) => item.id === setId);
+      if (!selectedSet) throw new HttpError(404, 'ไม่พบชุดเพลงนี้');
+      const body = await readJson(req);
+      const fields = safeSongInput(body.song);
+      if (!fields.title) throw new HttpError(400, 'Song title is required.');
+      const catalogSongs = await database.collection('groupSongs').find({ groupId: group._id }).toArray();
+      const duplicate = catalogSongs.find((item) => normalizeDuplicateField(item.title) === normalizeDuplicateField(fields.title) && normalizeDuplicateField(item.artist) === normalizeDuplicateField(fields.artist));
+      const now = new Date();
+      let song = duplicate;
+      let created = false;
+      if (!song) {
+        song = { ...fields, displayKey: fields.key, duplicateKey: duplicateSongKey(fields.title, fields.artist), groupId: group._id, revision: 1, updatedBy: user._id, updatedAt: now };
+        try { await database.collection('groupSongs').insertOne(song); created = true; }
+        catch (error) {
+          if (error.code !== 11000) throw error;
+          song = await database.collection('groupSongs').findOne({ groupId: group._id, duplicateKey: duplicateSongKey(fields.title, fields.artist) });
+          if (!song) throw error;
+        }
+      }
+      const songId = song._id;
+      const songIdString = songId.toString();
+      if ((selectedSet.songIds || []).some((id) => id.toString() === songIdString)) {
+        if (created) await database.collection('groupSongs').deleteOne({ _id: songId, groupId: group._id });
+        throw new HttpError(409, `“${song.title}” อยู่ในชุดนี้แล้ว`, { alreadyInSet: true });
+      }
+      const songIds = [...(selectedSet.songIds || []), songId];
+      const storedSnapshot = publicSong(song);
+      delete storedSnapshot.id;
+      delete storedSnapshot.groupId;
+      const setVersion = selectedSet.updatedAt === undefined ? { updatedAt: { $exists: false } } : { updatedAt: selectedSet.updatedAt };
+      const result = await database.collection('groups').updateOne(
+        { _id: group._id, weeklySets: { $elemMatch: { id: setId, ...setVersion } } },
+        { $addToSet: { librarySongIds: songId }, $set: { 'weeklySets.$.songIds': songIds, [`weeklySets.$.songSnapshots.${songIdString}`]: storedSnapshot, 'weeklySets.$.updatedAt': now, updatedAt: now, ...(group.activeSetId === setId ? { songIds } : {}) } }
+      );
+      if (!result.modifiedCount) {
+        if (created) await database.collection('groupSongs').deleteOne({ _id: songId, groupId: group._id });
+        throw new HttpError(409, 'ชุดนี้มีการเปลี่ยนแปลงจากอุปกรณ์อื่น กรุณาโหลดชุดใหม่แล้วลองอีกครั้ง');
+      }
+      const updatedGroup = { ...group, weeklySets: group.weeklySets.map((item) => item.id === setId ? { ...item, songIds, songSnapshots: { ...(item.songSnapshots || {}), [songIdString]: storedSnapshot }, updatedAt: now } : item), librarySongIds: [...new Map([...(group.librarySongIds || []), songId].map((id) => [id.toString(), id])).values()], ...(group.activeSetId === setId ? { songIds } : {}), updatedAt: now };
+      notifyGroup(updatedGroup, { type: 'group.changed', groupId: group._id.toString(), change: 'setlist', setId });
+      return json(res, created ? 201 : 200, { song: publicSong(song), imported: created, activeSet: { id: setId, songIds: songIds.map((id) => id.toString()) } });
+    }
+    if (pathParts[3] === 'sets' && pathParts[5] === 'songs' && pathParts[6] && ['PUT', 'PATCH'].includes(method)) {
+      requireEditor(member);
+      const setId = pathParts[4];
+      if (!ObjectId.isValid(pathParts[6])) throw new HttpError(400, 'Invalid song id.');
+      const songId = new ObjectId(pathParts[6]);
+      const selectedSet = group.weeklySets?.find((item) => item.id === setId);
+      if (!selectedSet || !(selectedSet.songIds || []).some((id) => id.toString() === songId.toString())) throw new HttpError(404, 'Song not found in this set.');
+      const snapshotKey = songId.toString();
+      const currentSnapshot = selectedSet.songSnapshots?.[snapshotKey];
+      if (!currentSnapshot) throw new HttpError(409, 'This set song has not been loaded yet. Reload the set and try again.');
+      const expectedRevision = Number(currentSnapshot.revision || 1);
+      const body = await readJson(req);
+      if (Number(body.expectedRevision) !== expectedRevision) throw new HttpError(409, 'This set song changed on another device. Reload it before saving.', { song: { ...currentSnapshot, id: snapshotKey } });
+      let updatedSnapshot;
+      if (method === 'PATCH' && pathParts[7] === 'display-key') {
+        const allowedKeys = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+        if (!allowedKeys.includes(body.key)) throw new HttpError(400, 'Invalid display key.');
+        updatedSnapshot = { ...currentSnapshot, displayKey: body.key, revision: expectedRevision + 1, updatedBy: user._id.toString(), updatedAt: new Date() };
+      } else {
+        const fields = safeSongInput(body.song);
+        if (!fields.title) throw new HttpError(400, 'Song title is required.');
+        updatedSnapshot = { ...currentSnapshot, ...fields, id: snapshotKey, displayKey: fields.key === currentSnapshot.key ? (currentSnapshot.displayKey || fields.key) : fields.key, revision: expectedRevision + 1, updatedBy: user._id.toString(), updatedAt: new Date() };
+      }
+      const revisionPath = `weeklySets.$.songSnapshots.${snapshotKey}.revision`;
+      const filter = { _id: group._id, weeklySets: { $elemMatch: { id: setId, [revisionPath.replace('weeklySets.$.', '')]: currentSnapshot.revision === undefined ? { $exists: false } : expectedRevision } } };
+      const storedSnapshot = { ...updatedSnapshot };
+      delete storedSnapshot.id;
+      delete storedSnapshot.groupId;
+      const result = await database.collection('groups').updateOne(filter, { $set: { [`weeklySets.$.songSnapshots.${snapshotKey}`]: storedSnapshot, 'weeklySets.$.updatedAt': updatedSnapshot.updatedAt, updatedAt: updatedSnapshot.updatedAt } });
+      if (!result.modifiedCount) throw new HttpError(409, 'This set song changed on another device. Reload it before saving.', { song: { ...currentSnapshot, id: snapshotKey } });
+      const updatedGroup = { ...group, weeklySets: group.weeklySets.map((item) => item.id === setId ? { ...item, songSnapshots: { ...(item.songSnapshots || {}), [snapshotKey]: storedSnapshot }, updatedAt: updatedSnapshot.updatedAt } : item) };
+      notifyGroup(updatedGroup, { type: 'group.changed', groupId: group._id.toString(), change: 'set_song_updated', setId, songId: snapshotKey, updatedBy: user._id.toString() });
+      return json(res, 200, { song: updatedSnapshot, activeSet: { id: setId, songSnapshots: updatedGroup.weeklySets.find((item) => item.id === setId).songSnapshots } });
     }
     if (pathParts[3] === 'songs' && pathParts[4] && method === 'PUT') {
       requireEditor(member);
@@ -697,7 +948,7 @@ async function handleApi(req, res, url) {
       const existingSongs = await database.collection('groupSongs').find({ groupId: group._id, _id: { $ne: songId } }, { projection: { title: 1, artist: 1 } }).toArray();
       const duplicate = existingSongs.find((item) => normalizeDuplicateField(item.title) === normalizeDuplicateField(fields.title) && normalizeDuplicateField(item.artist) === normalizeDuplicateField(fields.artist));
       if (duplicate) throw new HttpError(409, `มีเพลง “${duplicate.title}” ของศิลปินคนนี้อยู่ในกลุ่มแล้ว กรุณาตรวจสอบเพลงเดิมก่อนบันทึก`);
-      const updated = { ...song, ...fields, displayKey: song.displayKey || song.key, duplicateKey: duplicateSongKey(fields.title, fields.artist), revision: Number(song.revision || 1) + 1, updatedBy: user._id, updatedAt: new Date() };
+      const updated = { ...song, ...fields, displayKey: fields.key === song.key ? (song.displayKey || fields.key) : fields.key, duplicateKey: duplicateSongKey(fields.title, fields.artist), revision: Number(song.revision || 1) + 1, updatedBy: user._id, updatedAt: new Date() };
       let writeResult;
       const expectedGroupRevision = song.revision === undefined ? { revision: { $exists: false } } : { revision: song.revision };
       try { writeResult = await database.collection('groupSongs').replaceOne({ _id: songId, groupId: group._id, ...expectedGroupRevision }, updated); }
@@ -733,7 +984,7 @@ async function handleApi(req, res, url) {
       const songId = new ObjectId(pathParts[4]);
       const result = await database.collection('groupSongs').deleteOne({ _id: songId, groupId: group._id });
       if (!result.deletedCount) throw new HttpError(404, 'Song not found in this group.');
-      await database.collection('groups').updateOne({ _id: group._id }, { $pull: { songIds: songId }, $set: { updatedAt: new Date() } });
+      await database.collection('groups').updateOne({ _id: group._id }, { $pull: { songIds: songId, librarySongIds: songId }, $set: { updatedAt: new Date() } });
       notifyGroup(group, { type: 'group.changed', groupId: group._id.toString(), change: 'song_removed', songId: songId.toString() });
       return json(res, 200, { ok: true });
     }
@@ -820,6 +1071,7 @@ if (process.env.MONGODB_URI) {
       database.collection('notifications').createIndex({ userId: 1, createdAt: -1 }),
       database.collection('groupSongs').createIndex({ groupId: 1, updatedAt: -1 }),
       database.collection('groupSongs').createIndex({ groupId: 1, duplicateKey: 1 }, { unique: true, partialFilterExpression: { duplicateKey: { $type: 'string' } } }),
+      database.collection('groupSongSuggestions').createIndex({ groupId: 1, status: 1, createdAt: 1 }),
       database.collection('personalSongs').createIndex({ ownerId: 1, order: 1 }),
       database.collection('personalSongs').createIndex({ ownerId: 1, duplicateKey: 1 }, { unique: true, partialFilterExpression: { duplicateKey: { $type: 'string' } } }),
       database.collection('personalSetlists').createIndex({ ownerId: 1, id: 1 }, { unique: true })

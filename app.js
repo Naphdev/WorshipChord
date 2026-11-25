@@ -18,6 +18,7 @@ let currentSong = null;
 let readerSongIds = [];
 let readerContext = 'library';
 let editingGroupId = null;
+let editingGroupSetId = null;
 let authUser = null;
 let offlineMode = false;
 let previousFormatText = null;
@@ -30,7 +31,15 @@ let pendingSyncConflict = null;
 let groups = [];
 let activeGroup = null;
 let sharedSongs = [];
+let activeSetSongs = [];
+let activeWeeklySet = null;
+let activeMainTab = 'today';
+let groupSongPickerSource = 'group';
+let groupSuggestions = [];
+let editorSourceKeyConfirmed = false;
 let offlineGroupSnapshot = false;
+const SONGS_PER_PAGE = 12;
+const songPages = { today: 0, personal: 0, group: 0, groupLibrary: 0 };
 let memberPageOffset = 0;
 let memberSearchTimer = null;
 let memberRequestToken = 0;
@@ -163,10 +172,11 @@ async function enterOfflineMode(message = 'ฐานข้อมูล/อิน
   offlineMode = true;
   realtimeSocket?.close();
   realtimeSocket = null;
-  groups = snapshot ? [snapshot.group] : []; activeGroup = snapshot?.group || null; sharedSongs = snapshot?.songs || [];
+  groups = snapshot ? [snapshot.group] : []; activeGroup = snapshot?.group || null; sharedSongs = snapshot?.songs || []; activeWeeklySet = snapshot?.activeSet || null; activeSetSongs = snapshot?.setSongs || [];
   offlineGroupSnapshot = Boolean(snapshot);
   if (editingGroupId && !$('editorView').hidden) {
     editingGroupId = null;
+    editingGroupSetId = null;
     showView('library');
     notify('การแก้เพลงกลุ่มต้องเชื่อมต่ออินเทอร์เน็ต');
   }
@@ -555,7 +565,7 @@ async function loadPrivateLibrary(user, allowLegacyPrompt = true) {
   const migrationKey = `${DB_NAME}-legacy-import-complete`;
   const skipKey = `${DB_NAME}-legacy-import-skip-${user.id}`;
   if (allowLegacyPrompt && legacySongs.length && localStorage.getItem(migrationKey) !== 'done' && !localStorage.getItem(skipKey)) {
-    const shouldImport = window.confirm(`พบเพลงเก่า ${legacySongs.length} เพลงที่ยังเก็บในเครื่อง ต้องการนำเข้าไปยังบัญชี ${user.email} เพื่อซิงก์ผ่าน MongoDB หรือไม่?`);
+    const shouldImport = await confirmAction({ title: 'นำเพลงเดิมเข้าในบัญชีนี้?', message: `พบเพลงเก่า ${legacySongs.length} เพลงในอุปกรณ์นี้ ต้องการนำเข้าไปยังบัญชี ${user.email} เพื่อซิงก์ผ่าน MongoDB หรือไม่?`, confirmLabel: 'นำเข้าเพลง' });
     if (shouldImport) {
       const result = await api('/api/library/import', {
         method: 'POST',
@@ -613,6 +623,47 @@ function notify(message) {
   toast.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toast.classList.remove('show'), 2600);
+}
+
+function pageItems(items, key, pagerId) {
+  const pages = Math.max(1, Math.ceil(items.length / SONGS_PER_PAGE));
+  songPages[key] = Math.min(songPages[key], pages - 1);
+  const start = songPages[key] * SONGS_PER_PAGE;
+  const shown = items.slice(start, start + SONGS_PER_PAGE);
+  const pager = $(pagerId);
+  pager.hidden = pages < 2;
+  pager.innerHTML = pages < 2 ? '' : `<span>${start + 1}–${Math.min(start + SONGS_PER_PAGE, items.length)} จาก ${items.length} เพลง</span><div><button type="button" class="quiet-button" data-song-page="${key}" data-delta="-1" ${songPages[key] === 0 ? 'disabled' : ''}>ก่อนหน้า</button><span>หน้า ${songPages[key] + 1}/${pages}</span><button type="button" class="quiet-button" data-song-page="${key}" data-delta="1" ${songPages[key] >= pages - 1 ? 'disabled' : ''}>ถัดไป</button></div>`;
+  return shown.map((song, index) => ({ song, index: start + index }));
+}
+
+function bindSongPagers() {
+  document.querySelectorAll('.song-pagination').forEach((pager) => pager.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-song-page]');
+    if (!button || button.disabled) return;
+    const { songPage, delta } = { songPage: button.dataset.songPage, delta: Number(button.dataset.delta) };
+    songPages[songPage] += delta;
+    if (songPage === 'today') renderTodaySongs();
+    if (songPage === 'personal') renderSongRows();
+    if (songPage === 'group') renderGroupSongs();
+    if (songPage === 'groupLibrary') renderGroupLibrary();
+  }));
+}
+
+function confirmAction({ title, message, confirmLabel = 'ยืนยัน', danger = false }) {
+  const dialog = $('confirmDialog');
+  $('confirmTitle').textContent = title;
+  $('confirmMessage').textContent = message;
+  $('confirmAcceptButton').textContent = confirmLabel;
+  $('confirmAcceptButton').classList.toggle('danger-button', danger);
+  $('confirmAcceptButton').classList.toggle('primary-button', !danger);
+  return new Promise((resolve) => {
+    const finish = (accepted) => { dialog.close(); resolve(accepted); };
+    $('confirmAcceptButton').onclick = () => finish(true);
+    $('confirmCancelButton').onclick = () => finish(false);
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'confirm'), { once: true });
+    dialog.addEventListener('cancel', () => resolve(false), { once: true });
+    dialog.showModal();
+  });
 }
 
 async function api(path, options = {}) {
@@ -729,6 +780,74 @@ function displayText(song, targetKey = song?.key || 'C') {
   }).join('\n');
 }
 
+function chordTokensForKeyEstimate(text) {
+  const found = [];
+  const addExpression = (value) => {
+    const trimmed = value.trim();
+    if (!isChordExpression(trimmed)) return;
+    for (const match of trimmed.matchAll(CHORD_EXPRESSION_PATTERN)) {
+      const token = strictChordToken(match[0]);
+      if (token) found.push(token);
+    }
+  };
+  for (const line of String(text || '').split(/\r?\n/)) {
+    for (const bracket of line.matchAll(/\[([^\]]+)\]/g)) addExpression(bracket[1]);
+    const labeled = /^\s*(?:intro|midtro|interlude|ending|outro|bridge|tag|verse\s*\d*|pre[-\s]?chorus|chorus|post[-\s]?chorus|vamp|refrain|instrumental)\s*:\s*(.*)$/i.exec(line);
+    const row = labeled?.[1] || (!line.includes('[') && !/[\u0E00-\u0E7F]/.test(line) ? line : '');
+    if (row) addExpression(row);
+  }
+  return found;
+}
+
+function suggestSourceKey(text) {
+  const chords = chordTokensForKeyEstimate(text);
+  if (!chords.length) return null;
+  const majorScale = [0, 2, 4, 5, 7, 9, 11];
+  const minorScale = [0, 2, 3, 5, 7, 8, 10];
+  const majorQualities = ['major', 'minor', 'minor', 'major', 'major', 'minor', 'dim'];
+  const minorQualities = ['minor', 'dim', 'major', 'minor', 'minor', 'major', 'major'];
+  const parsed = chords.map((token) => {
+    const rootMatch = /^([A-G](?:#|b)?)/.exec(token);
+    const root = parseRoot(rootMatch?.[1] || '');
+    const suffix = token.slice(rootMatch?.[0].length || 0).split('/')[0].toLowerCase();
+    const quality = /dim/.test(suffix) ? 'dim' : /aug/.test(suffix) ? 'aug' : /m|min/.test(suffix) && !/maj/.test(suffix) ? 'minor' : /sus/.test(suffix) ? 'sus' : 'major';
+    return root ? { pitch: root.semitones, quality } : null;
+  }).filter(Boolean);
+  if (!parsed.length) return null;
+  const candidates = [];
+  for (let tonic = 0; tonic < 12; tonic += 1) for (const mode of ['major', 'minor']) {
+    const scale = mode === 'major' ? majorScale : minorScale;
+    const qualities = mode === 'major' ? majorQualities : minorQualities;
+    let score = 0;
+    for (let i = 0; i < parsed.length; i += 1) {
+      const chord = parsed[i];
+      const degree = scale.indexOf((chord.pitch - tonic + 12) % 12);
+      if (degree < 0) { score -= 1.1; continue; }
+      score += 1;
+      if (chord.quality === 'sus') score += 0.15;
+      else score += chord.quality === qualities[degree] ? 0.7 : chord.quality === 'major' && mode === 'minor' && degree === 4 ? 0.35 : -0.4;
+      if (degree === 0) score += 0.2;
+      if (degree === 4 && parsed[i + 1]?.pitch === tonic) score += 0.65;
+    }
+    candidates.push({ key: `${SHARP_NAMES[tonic]}${mode === 'minor' ? 'm' : ''}`, score });
+  }
+  candidates.sort((a, b) => b.score - a.score);
+  const gap = candidates[0].score - candidates[1].score;
+  return { key: candidates[0].key, clarity: parsed.length < 4 || gap < 1 ? 'ไม่ชัด' : gap < 2.2 ? 'พอเป็นไปได้' : 'ค่อนข้างชัด', chordCount: parsed.length };
+}
+
+function updateSourceKeyStatus() {
+  const suggestion = suggestSourceKey($('chordText').value);
+  $('sourceKeySuggestion').hidden = !suggestion;
+  $('applyKeySuggestionButton').hidden = !suggestion;
+  if (suggestion) $('sourceKeySuggestion').textContent = `จากคอร์ด ระบบคาดว่าอาจเป็น ${suggestion.key} · ความชัดเจน${suggestion.clarity} · ตรวจฟังอีกครั้งก่อนยืนยัน`;
+  $('sourceKeyStatus').textContent = editorSourceKeyConfirmed
+    ? `ยืนยันคีย์ต้นฉบับ ${$('sourceKeySelect').value} แล้ว`
+    : `คีย์ที่เลือก ${$('sourceKeySelect').value} ยังไม่ยืนยัน · ต้องตรงกับคอร์ดในข้อความ`;
+  $('confirmSourceKeyButton').textContent = editorSourceKeyConfirmed ? 'ยืนยันแล้ว ✓' : 'ยืนยันคีย์ต้นฉบับ';
+  $('confirmSourceKeyButton').disabled = editorSourceKeyConfirmed;
+}
+
 function chordHtml(text) {
   return escapeHtml(text).replace(/\[([^\]]+)\]/g, '<span class="chord-token">[$1]</span>');
 }
@@ -743,8 +862,35 @@ function activeGroupRole() {
 
 function canEditActiveGroup() { return ['owner', 'editor'].includes(activeGroupRole()); }
 
+function weekStartForServiceDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return '';
+  const date = new Date(`${value}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
+  return date.toISOString().slice(0, 10);
+}
+
+function nextAvailableServiceDate(sets = []) {
+  const nowBangkok = new Date(Date.now() + 7 * 60 * 60 * 1000);
+  nowBangkok.setUTCDate(nowBangkok.getUTCDate() + ((7 - nowBangkok.getUTCDay()) % 7));
+  for (let weeks = 0; weeks < 104; weeks += 1) {
+    const candidate = new Date(nowBangkok);
+    candidate.setUTCDate(candidate.getUTCDate() + weeks * 7);
+    const value = candidate.toISOString().slice(0, 10);
+    if (!sets.some((set) => set.start === weekStartForServiceDate(value))) return value;
+  }
+  return nowBangkok.toISOString().slice(0, 10);
+}
+
+function updateWeeklyCreateDateHint() {
+  const value = $('weeklyServiceDate').value;
+  const occupied = Boolean(value && activeGroup?.weeklySets?.some((set) => set.start === weekStartForServiceDate(value)));
+  $('weeklyCreateDateHint').textContent = occupied ? 'สัปดาห์นี้มีชุดแล้ว · เลือกชุดเดิมด้านบนเพื่อแก้วันเล่นหรือจัดเพลง' : 'เลือกวันภายในสัปดาห์ที่จะใช้ชุดเพลงนี้';
+  $('createWeeklySetButton').disabled = occupied || !value;
+  $('createEmptyWeeklySetButton').disabled = occupied || !value;
+}
+
 function renderGroupPanel() {
-  $('groupPanel').hidden = !authUser || (offlineMode && !offlineGroupSnapshot);
+  $('groupPanel').hidden = activeMainTab !== 'group' || !authUser || (offlineMode && !offlineGroupSnapshot);
   $('inboxButton').hidden = !authUser || offlineMode;
   $('accountButtonLabel').textContent = authUser ? (authUser.displayName || authUser.email.split('@')[0]) : 'เข้าสู่ระบบ';
   $('localBadgeText').textContent = offlineMode ? 'ออฟไลน์ · แก้ไขรอซิงก์' : authUser ? 'ซิงก์เพลงกับบัญชี' : 'เข้าสู่ระบบเพื่อดูเพลง';
@@ -755,10 +901,29 @@ function renderGroupPanel() {
   $('groupSelect').innerHTML = groups.map((group) => `<option value="${escapeHtml(group.id)}">${escapeHtml(group.name)}</option>`).join('');
   $('groupSelect').disabled = groups.length === 0 || offlineMode;
   if (activeGroup) $('groupSelect').value = activeGroup.id;
+  $('weeklySetTools').hidden = !activeGroup;
+  const sets = activeGroup?.weeklySets || [];
+  $('weeklySetSelect').innerHTML = sets.slice().sort((a, b) => b.start.localeCompare(a.start)).map((set) => {
+    const date = set.serviceDate || set.end || set.start;
+    const label = date ? new Intl.DateTimeFormat('th-TH', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`)) : (set.name || 'ชุดเพลง');
+    return `<option value="${escapeHtml(set.id)}">${label}${set.id === activeGroup?.activeSetId ? ' · ปัจจุบัน' : ''}</option>`;
+  }).join('');
+  if (activeWeeklySet) $('weeklySetSelect').value = activeWeeklySet.id;
+  if (!$('weeklyServiceDate').value) {
+    $('weeklyServiceDate').value = nextAvailableServiceDate(sets);
+  }
+  $('createWeeklySetButton').hidden = !canEditActiveGroup() || offlineMode;
+  $('createWeeklySetDetails').hidden = !canEditActiveGroup() || offlineMode;
+  const activeServiceDate = activeWeeklySet?.serviceDate || activeWeeklySet?.end || '';
+  const activeServiceLabel = activeServiceDate ? new Intl.DateTimeFormat('th-TH', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' }).format(new Date(`${activeServiceDate}T12:00:00Z`)) : '';
+  $('weeklySetHeading').textContent = activeWeeklySet ? `เพลงสำหรับ${activeServiceLabel || 'วันที่เล่น'}${activeWeeklySet.id === activeGroup?.activeSetId ? ' · ชุดปัจจุบัน' : ' · ชุดย้อนหลัง'}` : 'เพลงในชุดที่เลือก';
+  $('editWeeklyServiceDateButton').hidden = !activeWeeklySet || !canEditActiveGroup() || offlineMode;
+  updateWeeklyCreateDateHint();
   const offlineGroupPrepared = Boolean(activeGroup && localStorage.getItem(`${READER_PREFS_KEY}.offlineGroup`) === activeGroup.id);
   $('prepareOfflineGroupButton').hidden = !activeGroup;
   $('prepareOfflineGroupButton').disabled = offlineMode || !activeGroup;
   $('prepareOfflineGroupButton').textContent = offlineGroupPrepared ? 'บันทึกไว้แล้ว ✓' : 'บันทึกไว้ดูออฟไลน์';
+  $('manageGroupButton').hidden = !activeGroup || offlineMode || activeGroupRole() !== 'owner';
   $('groupOfflineHelp').hidden = !activeGroup || offlineMode;
   $('groupOfflineHelp').textContent = offlineGroupPrepared
     ? 'บันทึกเพลงกลุ่มนี้ไว้ในอุปกรณ์แล้ว เปิดดูได้เมื่อไม่มีอินเทอร์เน็ต (อ่านอย่างเดียว) · ไม่ได้เพิ่มลงเพลงของฉัน'
@@ -767,12 +932,16 @@ function renderGroupPanel() {
   if (offlineGroupSnapshot) $('groupOfflineStatus').textContent = 'กำลังเปิดสำเนาเพลงกลุ่มจากอุปกรณ์นี้ · อ่านอย่างเดียว · การเปลี่ยนคีย์มีผลเฉพาะอุปกรณ์นี้';
   $('inviteGroupButton').disabled = offlineMode || !activeGroup || !activeGroupRole();
   $('addGroupSongButton').hidden = !canEditActiveGroup() || offlineMode;
+  $('groupLibraryDetails').hidden = !activeGroup;
+  $('groupSuggestionDetails').hidden = !activeGroup || !canEditActiveGroup() || offlineMode;
   $('groupDropHint').hidden = !canEditActiveGroup() || offlineMode;
   $('libraryDropHint').hidden = !activeGroup || offlineMode;
   $('groupEmptyState').hidden = Boolean(activeGroup);
   $('groupEmptyState').textContent = groups.length ? 'เลือกกลุ่มเพื่อดูเพลงและสมาชิก' : 'สร้างกลุ่มเพื่อแชร์เพลงและลำดับเพลงกับทีมแบบเรียลไทม์';
   renderGroupMembers();
   renderGroupSongs();
+  renderGroupLibrary();
+  renderGroupSuggestions();
 }
 
 function renderGroupMembers() {
@@ -824,14 +993,91 @@ async function loadMemberDirectory(offset = 0) {
 }
 
 function renderGroupSongs() {
-  if (!activeGroup) { $('groupSongList').innerHTML = ''; return; }
+  if (!activeGroup) { $('groupSongList').innerHTML = ''; $('groupSongsPager').hidden = true; return; }
   const canEdit = canEditActiveGroup() && !offlineMode;
   const canCopy = !offlineMode;
-  $('groupSongList').innerHTML = sharedSongs.map((song, index) => `<article class="group-song-row" data-id="${escapeHtml(song.id)}" draggable="true" aria-grabbed="false">
+  $('groupSongList').innerHTML = pageItems(activeSetSongs, 'group', 'groupSongsPager').map(({ song, index }) => `<article class="group-song-row" data-id="${escapeHtml(song.id)}" draggable="true" aria-grabbed="false">
     <span class="today-order">${String(index + 1).padStart(2, '0')}</span>
-    <button class="group-song-open" data-open-group="${escapeHtml(song.id)}"><strong>${escapeHtml(song.title || 'เพลงไม่มีชื่อ')}</strong><small>${escapeHtml(song.artist || 'ไม่ระบุศิลปิน')} · คีย์ ${escapeHtml(song.displayKey || song.key || 'C')}</small></button>
+    <button class="group-song-open" data-open-group="${escapeHtml(song.id)}"><strong>${escapeHtml(song.title || 'เพลงไม่มีชื่อ')}</strong><small>${escapeHtml(song.artist || 'ไม่ระบุศิลปิน')} · คีย์ ${escapeHtml(song.displayKey || song.key || 'C')}${song.sourceKeyConfirmed === true ? '' : ' · คีย์ต้นฉบับรอตรวจ'}</small></button>
     <div class="group-song-actions">${canCopy ? `<button class="group-song-copy" data-group-action="copy" data-id="${escapeHtml(song.id)}" aria-label="คัดลอกเพลงไปเพลงของฉัน" title="คัดลอกเป็นเพลงส่วนตัว ไม่กระทบต้นฉบับ">＋ คัดลอก</button>` : ''}${canEdit ? `<button data-group-action="up" data-id="${escapeHtml(song.id)}" aria-label="เลื่อนเพลงกลุ่มขึ้น">↑</button><button data-group-action="down" data-id="${escapeHtml(song.id)}" aria-label="เลื่อนเพลงกลุ่มลง">↓</button><button data-group-action="edit" data-id="${escapeHtml(song.id)}">แก้ไข</button><button data-group-action="remove" data-id="${escapeHtml(song.id)}" aria-label="นำเพลงออกจากกลุ่ม">เอาออก</button>` : ''}</div>
   </article>`).join('');
+  $('addGroupSongButton').hidden = !canEdit;
+}
+
+function renderGroupLibrary() {
+  if (!$('groupLibraryDetails')) return;
+  if (!activeGroup) { $('groupLibraryList').innerHTML = ''; $('groupLibraryPager').hidden = true; return; }
+  const query = $('groupLibrarySearch').value.trim().toLocaleLowerCase('th-TH');
+  const items = sharedSongs.filter((song) => `${song.title} ${song.artist || ''}`.toLocaleLowerCase('th-TH').includes(query));
+  $('groupLibraryCount').textContent = `${sharedSongs.length} เพลง`;
+  $('groupLibraryList').innerHTML = pageItems(items, 'groupLibrary', 'groupLibraryPager').map(({ song, index }) => {
+    const confirmed = song.sourceKeyConfirmed === true;
+    const inSet = activeSetSongs.some((item) => item.id === song.id);
+    const canEdit = canEditActiveGroup() && !offlineMode;
+    return `<article class="group-song-row group-library-row"><span class="today-order">${String(index + 1).padStart(2, '0')}</span><span><strong>${escapeHtml(song.title || 'เพลงไม่มีชื่อ')}</strong><small>${escapeHtml(song.artist || 'ไม่ระบุศิลปิน')} · คีย์ต้นฉบับ ${escapeHtml(song.key || 'C')} · ${confirmed ? 'ยืนยันคีย์แล้ว' : 'คีย์รอตรวจ'}</small></span><div class="group-song-actions">${canEdit ? `<button class="quiet-button" data-add-catalog-song="${escapeHtml(song.id)}" ${inSet ? 'disabled' : ''}>${inSet ? 'อยู่ในชุดแล้ว' : 'เพิ่มในชุดนี้'}</button><button class="quiet-button" data-edit-catalog-song="${escapeHtml(song.id)}">แก้ข้อมูล</button><button class="quiet-button" data-remove-catalog-song="${escapeHtml(song.id)}">นำออก</button>` : ''}</div></article>`;
+  }).join('') || `<p class="group-empty">${query ? 'ไม่พบเพลงในคลังกลุ่ม' : 'ยังไม่มีเพลงในคลังกลุ่ม · แชร์จากเพลงของฉันหรือรออนุมัติเพลงที่สมาชิกเสนอ'}</p>`;
+}
+
+function renderGroupSuggestions() {
+  if (!$('groupSuggestionDetails')) return;
+  $('groupSuggestionCount').textContent = `${groupSuggestions.length} เพลง`;
+  $('groupSuggestionList').innerHTML = groupSuggestions.map((suggestion) => {
+    const song = suggestion.song || {};
+    const estimate = suggestSourceKey(song.text);
+    const suggested = estimate?.key.replace(/m$/, '') || song.key || 'C';
+    const options = SHARP_NAMES.map((key) => `<option value="${key}" ${key === suggested ? 'selected' : ''}>${key}</option>`).join('');
+    return `<article class="group-suggestion-row"><div class="suggestion-heading"><strong>${escapeHtml(song.title || 'เพลงไม่มีชื่อ')}</strong><span>เสนอโดย ${escapeHtml(suggestion.suggestedByName || 'สมาชิก')}</span></div><small>${escapeHtml(song.artist || 'ไม่ระบุศิลปิน')} · คีย์ที่ระบุ ${escapeHtml(song.key || 'C')} · ยังไม่ยืนยัน</small><details><summary>ตรวจเนื้อเพลงและคอร์ด</summary><pre>${escapeHtml(song.text || 'ไม่มีเนื้อเพลงแนบ')}</pre></details>${estimate ? `<p class="hint">จากคอร์ดอาจเป็น ${escapeHtml(estimate.key)} · ความชัดเจน${escapeHtml(estimate.clarity)} · คำแนะนำเท่านั้น</p>` : ''}<label class="suggestion-key-label">ยืนยันคีย์ต้นฉบับ<select data-review-key="${escapeHtml(suggestion.id)}">${options}</select></label><div class="group-song-actions"><button class="primary-button" data-review-suggestion="approve" data-id="${escapeHtml(suggestion.id)}">ยืนยันคีย์และเพิ่มเข้าคลัง</button><button class="quiet-button" data-review-suggestion="reject" data-id="${escapeHtml(suggestion.id)}">ปฏิเสธ</button></div></article>`;
+  }).join('');
+}
+
+async function loadGroupSuggestions() {
+  if (!activeGroup || !canEditActiveGroup() || offlineMode) { groupSuggestions = []; renderGroupSuggestions(); return; }
+  const result = await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/suggestions`);
+  groupSuggestions = result.suggestions || [];
+  renderGroupSuggestions();
+}
+
+function renderGroupSongPicker() {
+  const query = $('groupSongPickerSearch').value.trim().toLocaleLowerCase('th-TH');
+  document.querySelectorAll('[data-picker-source]').forEach((button) => button.setAttribute('aria-selected', String(button.dataset.pickerSource === groupSongPickerSource)));
+  const personalSource = groupSongPickerSource === 'personal';
+  $('groupSongPickerSearch').placeholder = personalSource ? 'ค้นเพลงของฉัน' : 'ค้นเพลงในคลังกลุ่ม';
+  $('groupSongPickerHelp').textContent = personalSource
+    ? 'เพลงที่เลือกจะถูกคัดลอกเข้าคลังเพลงกลุ่มและชุดนี้ · ต้นฉบับส่วนตัวไม่เปลี่ยน'
+    : 'เลือกเพลงที่แชร์ไว้ในคลังกลุ่ม เพื่อเพิ่มลงชุดนี้';
+  const sourceSongs = personalSource ? songs : sharedSongs;
+  const available = sourceSongs.filter((song) => `${song.title} ${song.artist || ''}`.toLocaleLowerCase('th-TH').includes(query));
+  $('groupSongPickerEmpty').hidden = available.length > 0;
+  $('groupSongPickerEmpty').textContent = available.length ? '' : query ? 'ไม่พบเพลงที่ตรงกัน' : personalSource ? 'ยังไม่มีเพลงส่วนตัวให้เพิ่ม' : 'คลังเพลงกลุ่มยังว่าง';
+  $('groupSongPickerList').innerHTML = available.map((song) => {
+    if (!personalSource) {
+      const alreadyAdded = activeSetSongs.some((item) => item.id === song.id);
+      return `<article class="group-song-row"><span><strong>${escapeHtml(song.title || 'เพลงไม่มีชื่อ')}</strong><small>${escapeHtml(song.artist || 'ไม่ระบุศิลปิน')}</small></span><button class="quiet-button" data-add-to-week="${escapeHtml(song.id)}" ${alreadyAdded ? 'disabled' : ''}>${alreadyAdded ? 'อยู่ในชุดแล้ว' : 'เพิ่ม'}</button></article>`;
+    }
+    const normalize = (value) => String(value || '').normalize('NFC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase('th-TH');
+    const duplicate = sharedSongs.find((item) => normalize(item.title) === normalize(song.title) && normalize(item.artist) === normalize(song.artist));
+    const duplicateInSet = duplicate && activeSetSongs.some((item) => item.id === duplicate.id);
+    const action = duplicateInSet ? `<button class="quiet-button" disabled>อยู่ในชุดแล้ว</button>` : `<button class="quiet-button" data-import-personal="${escapeHtml(song.id)}">${duplicate ? 'เพิ่มเพลงเดิม' : 'คัดลอกลงชุดนี้'}</button>`;
+    return `<article class="group-song-row"><span><strong>${escapeHtml(song.title || 'เพลงไม่มีชื่อ')}</strong><small>${escapeHtml(song.artist || 'ไม่ระบุศิลปิน')}${duplicate ? ' · มีในคลังกลุ่มแล้ว' : ''}</small></span>${action}</article>`;
+  }).join('');
+  $('groupSongPickerWeek').textContent = activeWeeklySet?.name || 'ชุดสัปดาห์';
+}
+
+async function importPersonalSongToWeek(songId) {
+  if (!activeGroup || !activeWeeklySet || !canEditActiveGroup() || offlineMode) return notify('เพิ่มเพลงจากคลังส่วนตัวต้องออนไลน์และมีสิทธิ์แก้ไขชุด');
+  const song = songs.find((item) => item.id === songId);
+  if (!song) return notify('ไม่พบเพลงในคลังส่วนตัว');
+  const button = [...$('groupSongPickerList').querySelectorAll('[data-import-personal]')].find((item) => item.dataset.importPersonal === songId);
+  if (button) { button.disabled = true; button.textContent = 'กำลังเพิ่ม…'; }
+  try {
+    const result = await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/sets/${encodeURIComponent(activeWeeklySet.id)}/songs/import`, { method: 'POST', body: JSON.stringify({ song }) });
+    await loadActiveGroup();
+    renderGroupSongPicker();
+    notify(result.imported ? 'คัดลอกเพลงเข้าคลังกลุ่มและเพิ่มลงชุดนี้แล้ว · เพลงส่วนตัวเดิมไม่เปลี่ยน' : 'ใช้เพลงที่มีในคลังกลุ่มและเพิ่มลงชุดนี้แล้ว');
+  } catch (error) {
+    if (error.payload?.alreadyInSet) { await loadActiveGroup(); renderGroupSongPicker(); }
+    else { renderGroupSongPicker(); notify(error.message || 'เพิ่มเพลงลงชุดไม่สำเร็จ'); }
+  }
 }
 
 async function loadGroups(preferredId = activeGroup?.id) {
@@ -839,6 +1085,8 @@ async function loadGroups(preferredId = activeGroup?.id) {
   const previousGroupId = activeGroup?.id;
   const result = await api('/api/groups');
   groups = result.groups;
+  const pinnedOfflineGroup = localStorage.getItem(`${READER_PREFS_KEY}.offlineGroup`);
+  if (pinnedOfflineGroup && !groups.some((group) => group.id === pinnedOfflineGroup)) localStorage.removeItem(`${READER_PREFS_KEY}.offlineGroup`);
   offlineGroupSnapshot = false;
   activeGroup = groups.find((group) => group.id === preferredId) || groups[0] || null;
   if (previousGroupId && previousGroupId !== activeGroup?.id) sendRealtime({ type: 'unsubscribe', groupId: previousGroupId });
@@ -851,12 +1099,16 @@ async function loadGroups(preferredId = activeGroup?.id) {
 async function loadActiveGroup() {
   if (!authUser || offlineMode || !activeGroup) return;
   const id = activeGroup.id;
-  const result = await api(`/api/groups/${encodeURIComponent(id)}`);
+  const setId = activeWeeklySet?.id;
+  const result = await api(`/api/groups/${encodeURIComponent(id)}${setId ? `?setId=${encodeURIComponent(setId)}` : ''}`);
   if (activeGroup?.id !== id) return;
   activeGroup = result.group;
-  sharedSongs = result.songs;
-  const snapshot = { id: activeGroup.id, group: activeGroup, songs: sharedSongs, savedAt: Date.now() };
+  sharedSongs = result.librarySongs || result.songs;
+  activeWeeklySet = result.activeSet;
+  activeSetSongs = result.songs;
+  const snapshot = { id: activeGroup.id, group: activeGroup, songs: sharedSongs, activeSet: activeWeeklySet, setSongs: activeSetSongs, savedAt: Date.now() };
   await saveGroupSnapshot(snapshot).catch(() => {});
+  await loadGroupSuggestions().catch(() => { groupSuggestions = []; });
   renderGroupPanel();
   sendRealtime({ type: 'subscribe', groupId: id });
 }
@@ -866,8 +1118,8 @@ async function prepareActiveGroupOffline() {
   try {
     const result = await api(`/api/groups/${encodeURIComponent(activeGroup.id)}`);
     activeGroup = result.group;
-    sharedSongs = result.songs;
-    await saveGroupSnapshot({ id: activeGroup.id, group: activeGroup, songs: sharedSongs, savedAt: Date.now() });
+    sharedSongs = result.librarySongs || result.songs; activeWeeklySet = result.activeSet; activeSetSongs = result.songs;
+    await saveGroupSnapshot({ id: activeGroup.id, group: activeGroup, songs: sharedSongs, activeSet: activeWeeklySet, setSongs: activeSetSongs, savedAt: Date.now() });
     localStorage.setItem(`${READER_PREFS_KEY}.offlineGroup`, activeGroup.id);
     offlineGroupSnapshot = false;
     renderGroupPanel();
@@ -901,6 +1153,12 @@ function connectRealtime() {
       try { await loadGroups(); } catch { /* Keep the current local songbook usable. */ }
     }
     if (message.type === 'group.changed' && message.groupId === activeGroup?.id) {
+      if (message.change === 'group_deleted') {
+        if (!$('readerView').hidden && readerContext === 'group') showView('library');
+        activeGroup = null; sharedSongs = [];
+        try { await loadGroups(); } catch { renderGroupPanel(); }
+        return;
+      }
       try {
         const readerWasOpen = !$('readerView').hidden && readerContext === 'group';
         const currentId = currentSong?.id;
@@ -961,10 +1219,43 @@ async function shareSongToGroup(songId) {
   try {
     await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/songs`, { method: 'POST', body: JSON.stringify({ song }) });
     await loadActiveGroup();
-    notify('เพิ่มเพลงเข้า list กลุ่มแล้ว');
+    notify('เพิ่มเพลงเข้าคลังกลุ่มแล้ว · เพิ่มลงชุดเล่นได้จากคลัง');
   } catch (error) {
     notify(error.message || 'แชร์เพลงไม่สำเร็จ');
   }
+}
+
+async function suggestSongToGroup(songId) {
+  if (offlineMode) { notify('การเสนอเพลงเข้ากลุ่มต้องเชื่อมต่ออินเทอร์เน็ต'); return; }
+  if (!activeGroup) return notify('เลือกกลุ่มก่อนเสนอเพลง');
+  const song = songs.find((item) => item.id === songId);
+  if (!song) return;
+  try {
+    await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/suggestions`, { method: 'POST', body: JSON.stringify({ song }) });
+    notify('ส่งเพลงให้ผู้แก้ไขตรวจคอร์ดและคีย์แล้ว');
+  } catch (error) { notify(error.message || 'เสนอเพลงไม่สำเร็จ'); }
+}
+
+async function reviewGroupSuggestion(suggestionId, action) {
+  if (!activeGroup || !canEditActiveGroup() || offlineMode) return;
+  const select = [...$('groupSuggestionList').querySelectorAll('[data-review-key]')].find((item) => item.dataset.reviewKey === suggestionId);
+  const body = action === 'approve' ? { action, key: select?.value || 'C', confirmSourceKey: true } : { action };
+  try {
+    await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/suggestions/${encodeURIComponent(suggestionId)}`, { method: 'PATCH', body: JSON.stringify(body) });
+    await loadActiveGroup();
+    notify(action === 'approve' ? 'ยืนยันคีย์และเพิ่มเพลงเข้าคลังกลุ่มแล้ว · เพิ่มลงชุดที่ต้องการได้จากคลัง' : 'ปฏิเสธเพลงที่เสนอแล้ว');
+  } catch (error) { notify(error.message || 'จัดการเพลงที่เสนอไม่สำเร็จ'); }
+}
+
+async function removeSongFromGroupLibrary(songId) {
+  const song = sharedSongs.find((item) => item.id === songId);
+  if (!song || !activeGroup || !canEditActiveGroup() || offlineMode) return;
+  if (!await confirmAction({ title: 'นำเพลงออกจากคลังกลุ่ม?', message: `“${song.title}” จะหายจากคลังที่ใช้เพิ่มเพลงใหม่ ชุดที่บันทึกไว้แล้วจะยังเก็บสำเนาของเพลงไว้`, confirmLabel: 'นำออกจากคลัง', danger: true })) return;
+  try {
+    await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/songs/${encodeURIComponent(song.id)}`, { method: 'DELETE' });
+    await loadActiveGroup();
+    notify('นำเพลงออกจากคลังกลุ่มแล้ว · ชุดเดิมยังเปิดดูได้');
+  } catch (error) { notify(error.message || 'นำเพลงออกจากคลังไม่สำเร็จ'); }
 }
 
 async function copyGroupSongToLibrary(songId) {
@@ -978,7 +1269,8 @@ async function copyGroupSongToLibrary(songId) {
     key,
     text: displayText(source, key),
     youtubeUrl: source.youtubeUrl || '',
-    chordUrl: source.chordUrl || ''
+    chordUrl: source.chordUrl || '',
+    sourceKeyConfirmed: source.sourceKeyConfirmed === true
   };
   try {
     lastPersonalMutationAt = Date.now();
@@ -993,7 +1285,7 @@ async function copyGroupSongToLibrary(songId) {
 }
 
 async function setGroupDisplayKey(key) {
-  if (readerContext !== 'group' || !currentSong || !activeGroup || (!canEditActiveGroup() && !(offlineMode && offlineGroupSnapshot))) return false;
+  if (readerContext !== 'group' || !currentSong || !activeGroup || !activeWeeklySet || (!canEditActiveGroup() && !(offlineMode && offlineGroupSnapshot))) return false;
   if (key === (currentSong.displayKey || currentSong.key || 'C')) return true;
   if (offlineMode && offlineGroupSnapshot) {
     currentSong = { ...currentSong, displayKey: key };
@@ -1003,23 +1295,25 @@ async function setGroupDisplayKey(key) {
     return true;
   }
   try {
-    const result = await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/songs/${encodeURIComponent(currentSong.id)}/display-key`, {
+    const result = await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/sets/${encodeURIComponent(activeWeeklySet.id)}/songs/${encodeURIComponent(currentSong.id)}/display-key`, {
       method: 'PATCH',
       body: JSON.stringify({ key, expectedRevision: currentSong.revision || 1 })
     });
     currentSong = result.song;
-    sharedSongs = sharedSongs.map((song) => song.id === result.song.id ? result.song : song);
+    activeSetSongs = activeSetSongs.map((song) => song.id === result.song.id ? result.song : song);
+    activeWeeklySet = { ...activeWeeklySet, songSnapshots: result.activeSet.songSnapshots };
+    await saveGroupSnapshot({ id: activeGroup.id, group: activeGroup, songs: sharedSongs, activeSet: activeWeeklySet, setSongs: activeSetSongs, savedAt: Date.now() }).catch(() => {});
     $('readerKeySelect').value = result.song.displayKey || result.song.key;
     renderChordContent($('readerChords'), result.song, $('readerKeySelect').value);
     renderGroupSongs();
-    notify(`เปลี่ยนคีย์กลุ่มเป็น ${key} แล้ว`);
+    notify(`เปลี่ยนคีย์เฉพาะชุดนี้เป็น ${key} แล้ว`);
     return true;
   } catch (error) {
     notify(error.message || 'เปลี่ยนคีย์กลุ่มไม่สำเร็จ');
-    const latest = error.payload?.song || sharedSongs.find((song) => song.id === currentSong?.id);
+    const latest = error.payload?.song || activeSetSongs.find((song) => song.id === currentSong?.id);
     if (latest) {
       currentSong = latest;
-      sharedSongs = sharedSongs.map((song) => song.id === latest.id ? latest : song);
+      activeSetSongs = activeSetSongs.map((song) => song.id === latest.id ? latest : song);
       $('readerKeySelect').value = latest.displayKey || latest.key || 'C';
       renderChordContent($('readerChords'), latest, $('readerKeySelect').value);
       renderGroupSongs();
@@ -1030,7 +1324,7 @@ async function setGroupDisplayKey(key) {
 
 function syncGroupSongInReader(songId) {
   if (!songId || currentSong?.id !== songId) return;
-  const updated = sharedSongs.find((song) => song.id === songId);
+  const updated = activeSetSongs.find((song) => song.id === songId) || sharedSongs.find((song) => song.id === songId);
   if (!updated) { showView('library'); notify('เพลงนี้ถูกนำออกจากกลุ่มแล้ว'); return; }
   currentSong = updated;
   $('readerTitle').textContent = updated.title || 'เพลงไม่มีชื่อ';
@@ -1045,16 +1339,17 @@ function syncGroupSongInReader(songId) {
 function setReaderKeyGuidance(context) {
   const sharedEditor = context === 'group' && canEditActiveGroup();
   const sharedViewer = context === 'group' && !sharedEditor;
-  $('readerKeyLabel').textContent = sharedEditor ? 'คีย์เพลงในกลุ่ม' : sharedViewer ? 'คีย์ส่วนตัว' : 'คีย์แสดงผล';
+  $('readerKeyLabel').textContent = sharedEditor ? 'คีย์เพลงชุดนี้' : sharedViewer ? 'คีย์ส่วนตัว' : 'คีย์แสดงผล';
   $('readerKeyScopeHint').textContent = sharedEditor
-    ? 'เปลี่ยนแล้วทุกคนในกลุ่มเห็นทันที · คีย์ต้นฉบับยังคงเดิม'
+    ? 'สมาชิกที่เปิดชุดนี้เห็นทันที · ชุดอื่นไม่เปลี่ยน'
     : sharedViewer
       ? 'ปรับเฉพาะหน้าคุณ · ไม่เปลี่ยนคีย์ที่สมาชิกคนอื่นเห็น'
       : 'ปรับคอร์ดที่แสดงสำหรับคุณ · ไม่แก้เนื้อเพลงหรือคีย์ต้นฉบับ';
-  $('readerKeySelect').setAttribute('aria-label', sharedEditor ? 'เปลี่ยนคีย์เพลงในกลุ่มสำหรับสมาชิกทุกคน' : sharedViewer ? 'ปรับคีย์เฉพาะหน้าคุณ' : 'เลือกคีย์แสดงผล');
+  $('readerKeySelect').setAttribute('aria-label', sharedEditor ? 'เปลี่ยนคีย์เพลงสำหรับชุดที่เลือก' : sharedViewer ? 'ปรับคีย์เฉพาะหน้าคุณ' : 'เลือกคีย์แสดงผล');
   $('readerSourceKeyButton').title = sharedEditor
-    ? 'ตั้งคีย์เพลงในกลุ่มกลับเป็นคีย์ต้นฉบับให้ทุกคน'
+    ? 'ตั้งคีย์ชุดนี้กลับเป็นคีย์ต้นฉบับ'
     : 'แสดงเพลงในคีย์ต้นฉบับ';
+  $('readerSourceKeyWarning').hidden = context !== 'group' || currentSong?.sourceKeyConfirmed === true;
 }
 
 async function hydrateAccount() {
@@ -1135,40 +1430,103 @@ function updateAccountDialog() {
   $('accountPublicId').textContent = authUser?.publicId ? `ID สำหรับค้นหา: ${authUser.publicId}` : 'กำลังเตรียม ID บัญชี…';
 }
 
-async function createGroup() {
+function openGroupSettings(create = false) {
   if (offlineMode) { notify('การจัดการกลุ่มต้องเชื่อมต่ออินเทอร์เน็ต'); return; }
-  const name = window.prompt('ตั้งชื่อกลุ่มเพลง');
-  if (name === null) return;
+  $('groupSettingsTitle').textContent = create ? 'สร้างกลุ่มเพลง' : 'ตั้งค่ากลุ่ม';
+  $('groupSettingsHelp').textContent = create ? 'สร้างพื้นที่แชร์เพลงและลำดับเพลงกับทีม' : `แก้ชื่อกลุ่ม “${activeGroup?.name || ''}”`;
+  $('groupNameInput').value = create ? '' : activeGroup?.name || '';
+  $('groupSettingsError').hidden = true;
+  $('deleteGroupButton').hidden = create;
+  $('saveGroupNameButton').textContent = create ? 'สร้างกลุ่ม' : 'บันทึกชื่อ';
+  $('groupNameForm').dataset.mode = create ? 'create' : 'rename';
+  $('groupSettingsDialog').showModal();
+  $('groupNameInput').focus();
+}
+
+async function saveGroupName(event) {
+  event.preventDefault();
+  const create = $('groupNameForm').dataset.mode === 'create';
+  const name = $('groupNameInput').value.trim();
   try {
-    const result = await api('/api/groups', { method: 'POST', body: JSON.stringify({ name }) });
+    const result = create
+      ? await api('/api/groups', { method: 'POST', body: JSON.stringify({ name }) })
+      : await api(`/api/groups/${encodeURIComponent(activeGroup.id)}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+    $('groupSettingsDialog').close();
     await loadGroups(result.group.id);
     connectRealtime();
-    notify('สร้างกลุ่มแล้ว');
+    notify(create ? 'สร้างกลุ่มแล้ว' : 'เปลี่ยนชื่อกลุ่มแล้ว');
+  } catch (error) { $('groupSettingsError').textContent = error.message; $('groupSettingsError').hidden = false; }
+}
+
+async function deleteActiveGroup() {
+  if (!activeGroup || offlineMode || activeGroupRole() !== 'owner') return;
+  const group = activeGroup;
+  const confirmed = await confirmAction({ title: 'ลบกลุ่มนี้หรือไม่?', message: `กลุ่ม “${group.name}” และเพลงที่แชร์ทั้งหมดจะถูกลบ สมาชิกจะไม่เห็นกลุ่มนี้อีก การลบย้อนกลับไม่ได้`, confirmLabel: 'ลบกลุ่ม', danger: true });
+  if (!confirmed) return;
+  try {
+    await api(`/api/groups/${encodeURIComponent(group.id)}`, { method: 'DELETE' });
+    if (localStorage.getItem(`${READER_PREFS_KEY}.offlineGroup`) === group.id) localStorage.removeItem(`${READER_PREFS_KEY}.offlineGroup`);
+    $('groupSettingsDialog').close();
+    activeGroup = null; sharedSongs = []; offlineGroupSnapshot = false;
+    await loadGroups();
+    connectRealtime();
+    notify('ลบกลุ่มแล้ว');
+  } catch (error) { $('groupSettingsError').textContent = error.message; $('groupSettingsError').hidden = false; }
+}
+
+async function createWeeklySet(copyPrevious = true) {
+  if (!activeGroup || !canEditActiveGroup() || offlineMode) return;
+  try {
+    const serviceDate = $('weeklyServiceDate').value;
+    if (!serviceDate) { notify('เลือกวันที่ใช้เล่นชุดก่อน'); return; }
+    const result = await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/sets`, { method: 'POST', body: JSON.stringify({ copyPrevious, copyFrom: activeWeeklySet?.id, serviceDate }) });
+    activeGroup = result.group; activeWeeklySet = result.activeSet; activeSetSongs = sharedSongs.filter((song) => activeWeeklySet.songIds.includes(song.id));
+    await loadActiveGroup();
+    notify('สร้างชุดสัปดาห์ใหม่แล้ว');
   } catch (error) { notify(error.message); }
+}
+
+async function saveWeeklyServiceDate(event) {
+  event.preventDefault();
+  if (!activeGroup || !activeWeeklySet || !canEditActiveGroup() || offlineMode) return;
+  try {
+    const result = await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/sets/${encodeURIComponent(activeWeeklySet.id)}`, { method: 'PATCH', body: JSON.stringify({ serviceDate: $('editServiceDateInput').value }) });
+    activeGroup = result.group;
+    activeWeeklySet = result.activeSet;
+    await loadActiveGroup();
+    $('editServiceDateDialog').close();
+    notify('เปลี่ยนวันเล่นแล้ว');
+  } catch (error) { $('editServiceDateError').textContent = error.message; $('editServiceDateError').hidden = false; }
+}
+
+async function addLibrarySongToWeek(songId) {
+  if (!activeGroup || !canEditActiveGroup() || !activeWeeklySet) return;
+  if (activeSetSongs.some((song) => song.id === songId)) return notify('เพลงนี้อยู่ในชุดแล้ว');
+  try { await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/setlist`, { method: 'PATCH', body: JSON.stringify({ setId: activeWeeklySet.id, songIds: [...activeSetSongs.map((song) => song.id), songId] }) }); await loadActiveGroup(); }
+  catch (error) { notify(error.message); }
 }
 
 async function moveSharedSong(songId, delta) {
   if (!activeGroup || !canEditActiveGroup()) return;
-  const ids = [...activeGroup.songIds];
+  const ids = activeSetSongs.map((song) => song.id);
   const index = ids.indexOf(songId);
   const target = index + delta;
   if (index < 0 || target < 0 || target >= ids.length) return;
   [ids[index], ids[target]] = [ids[target], ids[index]];
   try {
-    await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/setlist`, { method: 'PATCH', body: JSON.stringify({ songIds: ids }) });
+    await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/setlist`, { method: 'PATCH', body: JSON.stringify({ songIds: ids, setId: activeWeeklySet?.id }) });
     await loadActiveGroup();
   } catch (error) { notify(error.message); }
 }
 
 async function removeSharedSong(songId) {
   if (!activeGroup || !canEditActiveGroup()) return;
-  const song = sharedSongs.find((item) => item.id === songId);
-  if (!song || !window.confirm(`เอา “${song.title}” ออกจากเพลงของกลุ่มใช่ไหม?`)) return;
+  const song = activeSetSongs.find((item) => item.id === songId);
+  if (!song || !await confirmAction({ title: 'นำเพลงออกจากชุดนี้?', message: `“${song.title}” จะถูกนำออกจากชุดที่เลือก แต่ยังอยู่ในคลังเพลงกลุ่มและชุดอื่น`, confirmLabel: 'นำออกจากชุด', danger: true })) return;
   try {
-    await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/songs/${encodeURIComponent(songId)}`, { method: 'DELETE' });
-    sharedSongs = sharedSongs.filter((item) => item.id !== songId);
-    renderGroupSongs();
-    notify('นำเพลงออกจากกลุ่มแล้ว');
+    await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/setlist`, { method: 'PATCH', body: JSON.stringify({ setId: activeWeeklySet?.id, songIds: activeSetSongs.filter((item) => item.id !== songId).map((item) => item.id) }) });
+    await loadActiveGroup();
+    notify('นำเพลงออกจากชุดสัปดาห์นี้แล้ว · ยังอยู่ในคลังเพลงกลุ่ม');
   } catch (error) { notify(error.message); }
 }
 
@@ -1186,6 +1544,7 @@ function renderSongRows() {
     return;
   }
   const query = $('searchInput').value.trim().toLowerCase();
+  if (query) songPages.personal = 0;
   const searchItems = [
     ...songs.map((song) => ({ song, context: 'library' })),
     ...(!offlineMode ? sharedSongs.map((song) => ({ song, context: 'group' })) : []),
@@ -1212,17 +1571,19 @@ function renderSongRows() {
     results.innerHTML = `<p class="search-result-count">${visibleItems.length ? `พบ ${visibleItems.length} เพลง` : 'ไม่พบเพลงที่ตรงกัน'}</p>${markup || `<button type="button" class="search-add-button" id="searchAddSongButton">＋ เพิ่มเพลง “${escapeHtml($('searchInput').value.trim())}”</button>`}`;
   } else results.innerHTML = '';
   const shareButton = authUser && canEditActiveGroup()
-    ? '<button data-action="shareGroup" title="แชร์เข้า list กลุ่ม" aria-label="แชร์เพลงเข้ากลุ่ม">แชร์</button>'
+    ? '<button data-action="shareGroup" title="เพิ่มเพลงเข้าคลังกลุ่ม" aria-label="เพิ่มเพลงเข้าคลังกลุ่ม">เข้าคลังกลุ่ม</button>'
+    : '';
+  const suggestionButton = authUser && activeGroup && activeGroupRole() === 'viewer' && !offlineMode
+    ? '<button data-action="suggestGroup" title="เสนอให้ผู้แก้ไขตรวจและเพิ่มเข้าคลังกลุ่ม">เสนอเพลง</button>'
     : '';
   $('songList').hidden = Boolean(query);
-  $('songList').innerHTML = visible.map((song) => {
-    const index = songs.findIndex((item) => item.id === song.id);
+  $('songList').innerHTML = pageItems(visible, 'personal', 'personalSongsPager').map(({ song, index }) => {
     const inToday = todaySetlist.songIds.includes(song.id);
     return `<article class="song-row" data-id="${song.id}" draggable="true" aria-grabbed="false">
       <span class="song-index">${String(index + 1).padStart(2, '0')}</span>
       <div class="song-main" data-open="${song.id}" tabindex="0" role="button" aria-label="เปิดเพลง ${escapeHtml(song.title)}"><strong>${escapeHtml(song.title || 'เพลงไม่มีชื่อ')}</strong><small>${escapeHtml(song.artist || 'ยังไม่ระบุศิลปิน')}</small></div>
       <span class="song-key">${escapeHtml(song.key || 'C')}</span>
-      <div class="row-actions"><button data-action="today" data-id="${song.id}" title="${inToday ? 'อยู่ในเพลงวันนี้แล้ว' : 'เพิ่มเข้าเพลงวันนี้'}" aria-label="${inToday ? 'อยู่ในเพลงวันนี้แล้ว' : 'เพิ่มเข้าเพลงวันนี้'}" ${inToday ? 'disabled' : ''}>${inToday ? '✓' : '+ วันนี้'}</button>${shareButton.replaceAll('data-action="shareGroup"', `data-action="shareGroup" data-id="${song.id}"`)}<button data-action="up" data-id="${song.id}" title="เลื่อนขึ้น" aria-label="เลื่อนเพลงขึ้น">↑</button><button data-action="down" data-id="${song.id}" title="เลื่อนลง" aria-label="เลื่อนเพลงลง">↓</button><button data-action="edit" data-id="${song.id}" title="แก้ไข" aria-label="แก้ไขเพลง">✎</button><button data-action="delete" data-id="${song.id}" title="ลบ" aria-label="ลบเพลง">×</button></div>
+      <div class="row-actions"><button data-action="today" data-id="${song.id}" title="${inToday ? 'อยู่ในเพลงวันนี้แล้ว' : 'เพิ่มเข้าเพลงวันนี้'}" aria-label="${inToday ? 'อยู่ในเพลงวันนี้แล้ว' : 'เพิ่มเข้าเพลงวันนี้'}" ${inToday ? 'disabled' : ''}>${inToday ? '✓' : '+ วันนี้'}</button>${shareButton.replaceAll('data-action="shareGroup"', `data-action="shareGroup" data-id="${song.id}"`)}${suggestionButton.replaceAll('data-action="suggestGroup"', `data-action="suggestGroup" data-id="${song.id}"`)}<button data-action="up" data-id="${song.id}" title="เลื่อนขึ้น" aria-label="เลื่อนเพลงขึ้น">↑</button><button data-action="down" data-id="${song.id}" title="เลื่อนลง" aria-label="เลื่อนเพลงลง">↓</button><button data-action="edit" data-id="${song.id}" title="แก้ไข" aria-label="แก้ไขเพลง">✎</button><button data-action="delete" data-id="${song.id}" title="ลบ" aria-label="ลบเพลง">×</button></div>
     </article>`;
   }).join('');
   $('emptyState').hidden = songs.length > 0;
@@ -1359,7 +1720,7 @@ function renderTodaySongs() {
   const ordered = todaySongs();
   $('todaySongCount').textContent = `${ordered.length} เพลง`;
   $('todaySetlistEmpty').hidden = ordered.length > 0;
-  $('todaySongList').innerHTML = ordered.map((song, index) => `<article class="today-song-row" data-id="${song.id}" draggable="true" aria-grabbed="false">
+  $('todaySongList').innerHTML = pageItems(ordered, 'today', 'todaySongsPager').map(({ song, index }) => `<article class="today-song-row" data-id="${song.id}" draggable="true" aria-grabbed="false">
     <span class="today-drag-handle" aria-hidden="true">⠿</span>
     <button class="today-song-open" data-open-today="${song.id}" aria-label="เปิด ${escapeHtml(song.title || 'เพลงไม่มีชื่อ')} คอร์ด ${escapeHtml(song.key || 'C')}"><span class="today-order">${String(index + 1).padStart(2, '0')}</span><span class="today-song-copy"><strong>${escapeHtml(song.title || 'เพลงไม่มีชื่อ')}</strong><small>${escapeHtml(song.artist || 'ยังไม่ระบุศิลปิน')}</small></span><span class="song-key">${escapeHtml(song.key || 'C')}</span></button>
     <div class="today-row-actions"><button data-action="todayUp" data-id="${song.id}" aria-label="เลื่อนขึ้น" title="เลื่อนขึ้น">↑</button><button data-action="todayDown" data-id="${song.id}" aria-label="เลื่อนลง" title="เลื่อนลง">↓</button><button data-action="todayRemove" data-id="${song.id}" aria-label="เอาออกจากเพลงวันนี้" title="เอาออก">×</button></div>
@@ -1373,11 +1734,19 @@ function showView(view) {
   window.scrollTo(0, 0);
 }
 
+function setMainTab(tab) {
+  activeMainTab = ['today', 'group', 'personal'].includes(tab) ? tab : 'today';
+  $('todaySetlistPanel').hidden = activeMainTab !== 'today';
+  $('personalLibraryDropZone').hidden = activeMainTab !== 'personal';
+  document.querySelectorAll('[data-main-tab]').forEach((button) => button.setAttribute('aria-selected', String(button.dataset.mainTab === activeMainTab)));
+  renderGroupPanel();
+}
+
 function makeBlankSong() {
   return { id: newLocalId(), title: '', artist: '', key: 'C', text: '', order: songs.length ? Math.max(...songs.map((song) => song.order)) + 1 : 0, updatedAt: Date.now() };
 }
 
-function openEditor(song = makeBlankSong(), groupId = null) {
+function openEditor(song = makeBlankSong(), groupId = null, setId = null) {
   if (!groupId && !authUser) {
     updateAccountDialog();
     $('accountDialog').showModal();
@@ -1386,21 +1755,25 @@ function openEditor(song = makeBlankSong(), groupId = null) {
   }
   currentSong = song;
   editingGroupId = groupId;
+  editingGroupSetId = groupId && song.id && setId ? setId : null;
+  editorSourceKeyConfirmed = song.sourceKeyConfirmed === true;
   editingId = song.id;
+  $('backButton').querySelector('span').textContent = groupId ? 'กลับไปเพลงกลุ่ม' : 'เพลงของฉัน';
   $('songTitle').value = song.title || '';
   $('songArtist').value = song.artist || '';
   $('chordText').value = song.text || '';
   keyOptions($('sourceKeySelect'), song.key || 'C');
   keyOptions($('keySelect'), song.key || 'C');
+  updateSourceKeyStatus();
   $('fontSizeRange').value = '16';
   $('lineSpacingRange').value = '16';
-  $('saveSongButton').textContent = groupId ? 'บันทึกเพลงร่วมกัน' : 'บันทึกเพลง';
+  $('saveSongButton').textContent = editingGroupSetId ? 'บันทึกการแก้ไขชุดนี้' : groupId ? 'บันทึกเพลงร่วมกัน' : 'บันทึกเพลง';
   updatePreview();
   showView('editor');
 }
 
 function readEditor() {
-  return { ...(currentSong || makeBlankSong()), id: editingId || newLocalId(), title: $('songTitle').value.trim(), artist: $('songArtist').value.trim(), text: $('chordText').value, key: $('sourceKeySelect').value, updatedAt: Date.now() };
+  return { ...(currentSong || makeBlankSong()), id: editingId || newLocalId(), title: $('songTitle').value.trim(), artist: $('songArtist').value.trim(), text: $('chordText').value, key: $('sourceKeySelect').value, sourceKeyConfirmed: editorSourceKeyConfirmed, updatedAt: Date.now() };
 }
 
 function renderChordContent(target, song, key) {
@@ -1432,6 +1805,7 @@ function renderChordContent(target, song, key) {
 
 function updatePreview() {
   const song = readEditor();
+  updateSourceKeyStatus();
   renderChordContent($('songPreview'), song, $('keySelect').value);
   applyCompactText($('songPreview'), Number($('fontSizeRange').value), Number($('lineSpacingRange').value), $('previewFitButton').getAttribute('aria-pressed') === 'true');
 }
@@ -1440,7 +1814,17 @@ async function saveCurrentSong() {
   const song = readEditor();
   if (!song.title) { $('songTitle').focus(); notify('ใส่ชื่อเพลงก่อนบันทึก'); return; }
   try {
-    if (editingGroupId && !currentSong?.revision) {
+    if (editingGroupId && editingGroupSetId) {
+      const result = await api(`/api/groups/${encodeURIComponent(editingGroupId)}/sets/${encodeURIComponent(editingGroupSetId)}/songs/${encodeURIComponent(song.id)}`, {
+        method: 'PUT', body: JSON.stringify({ expectedRevision: currentSong.revision || 1, song })
+      });
+      currentSong = result.song;
+      activeSetSongs = activeSetSongs.map((item) => item.id === result.song.id ? result.song : item);
+      activeWeeklySet = { ...activeWeeklySet, songSnapshots: result.activeSet.songSnapshots };
+      await saveGroupSnapshot({ id: activeGroup.id, group: activeGroup, songs: sharedSongs, activeSet: activeWeeklySet, setSongs: activeSetSongs, savedAt: Date.now() }).catch(() => {});
+      renderGroupSongs();
+      notify('บันทึกการแก้ไขไว้ในชุดนี้แล้ว · ชุดอื่นไม่เปลี่ยน');
+    } else if (editingGroupId && !currentSong?.revision) {
       const result = await api(`/api/groups/${encodeURIComponent(editingGroupId)}/songs`, {
         method: 'POST', body: JSON.stringify({ song })
       });
@@ -1456,7 +1840,8 @@ async function saveCurrentSong() {
       currentSong = result.song;
       sharedSongs = sharedSongs.map((item) => item.id === result.song.id ? result.song : item);
       renderGroupSongs();
-      notify('บันทึกเพลงให้สมาชิกในกลุ่มแล้ว');
+      renderGroupLibrary();
+      notify('บันทึกข้อมูลในคลังกลุ่มแล้ว · ชุดที่บันทึกไว้ไม่เปลี่ยน');
     } else {
       if (!authUser) { notify('เข้าสู่ระบบก่อนบันทึกเพลงส่วนตัว'); return; }
       lastPersonalMutationAt = Date.now();
@@ -1531,7 +1916,7 @@ function openReader(song, context = 'library') {
 }
 
 function readerContextSongs() {
-  return readerContext === 'today' ? todaySongs() : readerContext === 'group' ? sharedSongs : songs;
+  return readerContext === 'today' ? todaySongs() : readerContext === 'group' ? activeSetSongs : songs;
 }
 
 function renderReaderPosition() {
@@ -1849,6 +2234,14 @@ async function previewBackupImport(file) {
 }
 
 function bindEvents() {
+  bindSongPagers();
+  document.querySelectorAll('[data-main-tab]').forEach((button) => button.addEventListener('click', () => setMainTab(button.dataset.mainTab)));
+  document.querySelectorAll('[data-picker-source]').forEach((button) => button.addEventListener('click', () => {
+    groupSongPickerSource = button.dataset.pickerSource;
+    $('groupSongPickerSearch').value = '';
+    renderGroupSongPicker();
+    $('groupSongPickerSearch').focus();
+  }));
   $('newSongButton').addEventListener('click', () => openEditor());
   $('emptyNewSongButton').addEventListener('click', () => openEditor());
   $('accountButton').addEventListener('click', () => { updateAccountDialog(); $('accountDialog').showModal(); });
@@ -1953,9 +2346,24 @@ function bindEvents() {
       }
     } catch (error) { notify(error.message); }
   });
-  $('createGroupButton').addEventListener('click', createGroup);
-  $('addGroupSongButton').addEventListener('click', () => {
-    if (activeGroup && canEditActiveGroup()) openEditor(makeBlankSong(), activeGroup.id);
+  $('createGroupButton').addEventListener('click', () => openGroupSettings(true));
+  $('manageGroupButton').addEventListener('click', () => openGroupSettings(false));
+  $('groupNameForm').addEventListener('submit', saveGroupName);
+  $('deleteGroupButton').addEventListener('click', deleteActiveGroup);
+  $('addGroupSongButton').addEventListener('click', () => { groupSongPickerSource = 'group'; $('groupSongPickerSearch').value = ''; renderGroupSongPicker(); $('groupSongPickerDialog').showModal(); $('groupSongPickerSearch').focus(); });
+  $('groupSongPickerSearch').addEventListener('input', renderGroupSongPicker);
+  $('groupLibrarySearch').addEventListener('input', () => { songPages.groupLibrary = 0; renderGroupLibrary(); });
+  $('groupLibraryList').addEventListener('click', async (event) => {
+    const add = event.target.closest('[data-add-catalog-song]');
+    const edit = event.target.closest('[data-edit-catalog-song]');
+    const remove = event.target.closest('[data-remove-catalog-song]');
+    if (add && !add.disabled) await addLibrarySongToWeek(add.dataset.addCatalogSong);
+    if (edit) openEditor(sharedSongs.find((song) => song.id === edit.dataset.editCatalogSong), activeGroup?.id);
+    if (remove) await removeSongFromGroupLibrary(remove.dataset.removeCatalogSong);
+  });
+  $('groupSuggestionList').addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-review-suggestion]');
+    if (button) await reviewGroupSuggestion(button.dataset.id, button.dataset.reviewSuggestion);
   });
   $('groupSelect').addEventListener('change', async () => {
     const previousId = activeGroup?.id;
@@ -1965,6 +2373,34 @@ function bindEvents() {
     renderGroupPanel();
     try { if (activeGroup) await loadActiveGroup(); renderSongRows(); }
     catch (error) { notify(error.message); }
+  });
+  $('weeklySetSelect').addEventListener('change', async () => {
+    activeWeeklySet = activeGroup?.weeklySets?.find((set) => set.id === $('weeklySetSelect').value) || null;
+    songPages.group = 0;
+    try { await loadActiveGroup(); } catch (error) { notify(error.message); }
+  });
+  $('weeklyServiceDate').addEventListener('change', updateWeeklyCreateDateHint);
+  $('editWeeklyServiceDateButton').addEventListener('click', () => {
+    if (!activeWeeklySet) return;
+    $('editServiceDateInput').value = activeWeeklySet.serviceDate || activeWeeklySet.end || activeWeeklySet.start;
+    $('editServiceDateWeek').textContent = `เลือกวันภายในสัปดาห์ ${activeWeeklySet.start}–${activeWeeklySet.end}`;
+    $('editServiceDateError').hidden = true;
+    $('editServiceDateDialog').showModal();
+  });
+  $('editServiceDateForm').addEventListener('submit', saveWeeklyServiceDate);
+  const createWeek = (copyPrevious) => {
+    if (!activeGroup) return;
+    createWeeklySet(copyPrevious);
+  };
+  $('createWeeklySetButton').addEventListener('click', () => createWeek(true));
+  $('createEmptyWeeklySetButton').addEventListener('click', () => createWeek(false));
+  $('groupSongPickerList').addEventListener('click', async (event) => {
+    const personalButton = event.target.closest('[data-import-personal]');
+    if (personalButton) { await importPersonalSongToWeek(personalButton.dataset.importPersonal); return; }
+    const groupButton = event.target.closest('[data-add-to-week]');
+    if (!groupButton || groupButton.disabled) return;
+    await addLibrarySongToWeek(groupButton.dataset.addToWeek);
+    renderGroupSongPicker();
   });
   $('prepareOfflineGroupButton').addEventListener('click', prepareActiveGroupOffline);
   $('inviteGroupButton').addEventListener('click', () => {
@@ -2046,16 +2482,16 @@ function bindEvents() {
       if (groupAction === 'copy') await copyGroupSongToLibrary(id);
       if (groupAction === 'up') await moveSharedSong(id, -1);
       if (groupAction === 'down') await moveSharedSong(id, 1);
-      if (groupAction === 'edit') openEditor(sharedSongs.find((song) => song.id === id), activeGroup?.id);
+      if (groupAction === 'edit') openEditor(activeSetSongs.find((song) => song.id === id), activeGroup?.id, activeWeeklySet?.id);
       if (groupAction === 'remove') await removeSharedSong(id);
       return;
     }
     const opener = event.target.closest('[data-open-group]');
-    if (opener) openReader(sharedSongs.find((song) => song.id === opener.dataset.openGroup), 'group');
+    if (opener) openReader(activeSetSongs.find((song) => song.id === opener.dataset.openGroup) || sharedSongs.find((song) => song.id === opener.dataset.openGroup), 'group');
   });
   $('backButton').addEventListener('click', () => { showView('library'); renderSongRows(); });
   $('readerBackButton').addEventListener('click', () => showView('library'));
-  $('readerEditButton').addEventListener('click', () => openEditor(currentSong, readerContext === 'group' ? activeGroup?.id : null));
+  $('readerEditButton').addEventListener('click', () => openEditor(currentSong, readerContext === 'group' ? activeGroup?.id : null, readerContext === 'group' ? activeWeeklySet?.id : null));
   $('readerPrevButton').addEventListener('click', () => navigateReader(-1));
   $('readerNextButton').addEventListener('click', () => navigateReader(1));
   $('readerQueue').addEventListener('click', (event) => {
@@ -2132,10 +2568,22 @@ function bindEvents() {
   $('chordText').addEventListener('input', () => {
     previousFormatText = null;
     $('undoFormatButton').disabled = true;
+    editorSourceKeyConfirmed = false;
     updatePreview();
   });
   $('keySelect').addEventListener('change', updatePreview);
-  $('sourceKeySelect').addEventListener('change', () => { $('keySelect').value = $('sourceKeySelect').value; updatePreview(); });
+  $('sourceKeySelect').addEventListener('change', () => { editorSourceKeyConfirmed = false; $('keySelect').value = $('sourceKeySelect').value; updatePreview(); });
+  $('confirmSourceKeyButton').addEventListener('click', () => { editorSourceKeyConfirmed = true; updateSourceKeyStatus(); notify(`ยืนยันคีย์ต้นฉบับ ${$('sourceKeySelect').value} แล้ว`); });
+  $('applyKeySuggestionButton').addEventListener('click', () => {
+    const suggestion = suggestSourceKey($('chordText').value);
+    if (!suggestion) return;
+    editorSourceKeyConfirmed = false;
+    const root = suggestion.key.replace(/m$/, '');
+    $('sourceKeySelect').value = root;
+    $('keySelect').value = root;
+    updatePreview();
+    notify(`ตั้งคีย์แนะนำเป็น ${suggestion.key} แล้ว · โปรดตรวจฟังก่อนยืนยัน`);
+  });
   $('fontSizeRange').addEventListener('input', updatePreview);
   $('readerKeySelect').addEventListener('change', async () => {
     const targetKey = $('readerKeySelect').value;
@@ -2158,12 +2606,13 @@ function bindEvents() {
       const { action, id } = actionButton.dataset;
       if (action === 'today') await placeSongInToday(id);
       if (action === 'shareGroup') await shareSongToGroup(id);
+      if (action === 'suggestGroup') await suggestSongToGroup(id);
       if (action === 'up') await moveSong(id, -1);
       if (action === 'down') await moveSong(id, 1);
       if (action === 'edit') openEditor(songs.find((song) => song.id === id));
       if (action === 'delete') {
         const song = songs.find((item) => item.id === id);
-        if (!song || !window.confirm(`ลบ “${song.title}” ออกจากบัญชีของคุณหรือไม่?`)) return;
+        if (!song || !await confirmAction({ title: 'ลบเพลงนี้หรือไม่?', message: `“${song.title}” จะถูกลบออกจากเพลงของคุณและเพลงวันนี้`, confirmLabel: 'ลบเพลง', danger: true })) return;
         await deletePersonalSong(song);
       }
       return;
@@ -2235,7 +2684,7 @@ function bindEvents() {
       if (rect && event.clientY > rect.top + rect.height / 2) index += 1;
       ids.splice(Math.min(index, ids.length), 0, songId);
       try {
-        await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/setlist`, { method: 'PATCH', body: JSON.stringify({ songIds: ids }) });
+        await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/setlist`, { method: 'PATCH', body: JSON.stringify({ songIds: ids, setId: activeWeeklySet?.id }) });
         await loadActiveGroup();
       } catch (error) { notify(error.message); }
     }
