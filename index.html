@@ -36,10 +36,12 @@
           </div>
           <div id="connectivityBanner" class="connectivity-banner" role="status" aria-live="polite" hidden><span id="connectivityText"></span><button id="syncNowButton" type="button" class="quiet-button" hidden>ลองเชื่อมต่อ</button></div>
           <div class="library-tools">
-            <label class="search-box"><span aria-hidden="true">⌕</span><input id="searchInput" type="search" placeholder="ค้นหาชื่อเพลงหรือศิลปิน" /></label>
+            <label class="search-box"><span aria-hidden="true">⌕</span><input id="searchInput" type="search" placeholder="ค้นหาชื่อเพลง ศิลปิน เนื้อร้อง หรือคอร์ด" aria-describedby="searchHelp" /></label>
             <button class="quiet-button" id="importBackupButton">นำเข้าข้อมูล</button>
             <input id="backupFile" type="file" accept="application/json,.json" hidden />
           </div>
+          <p id="searchHelp" class="search-help">ค้นหาได้จากชื่อเพลง ศิลปิน เนื้อร้อง หรือคอร์ด</p>
+          <div id="searchResults" class="search-results" aria-live="polite" hidden></div>
           <section id="todaySetlistPanel" class="today-panel" aria-labelledby="todayHeading">
             <div class="today-heading">
               <div><p class="eyebrow">SETLIST</p><h2 id="todayHeading">เพลงวันนี้</h2></div>
@@ -86,6 +88,7 @@
               <label class="field-label">คีย์ต้นฉบับ <select id="sourceKeySelect" aria-label="เลือกคีย์ต้นฉบับ"></select><span class="hint">เลือกคีย์ที่ตรงกับคอร์ดในเนื้อเพลง</span></label>
               <label class="field-label chord-editor-label">เนื้อเพลงและคอร์ด
                 <span class="hint">ใช้คอร์ดแบบ <code>[G]</code> หรือวางคอร์ดเดี่ยวเป็นแถว เช่น <code>G C</code> ก็ได้ ระบบจะเปลี่ยนคีย์โดยคงเนื้อไทยไว้</span>
+                <div class="format-tools"><button type="button" class="quiet-button" id="formatSpacingButton">จัดช่องไฟ</button><button type="button" class="quiet-button" id="undoFormatButton" disabled>เลิกทำ</button><span class="hint">จัดช่องว่างซ้ำและบรรทัดว่าง โดยคงเนื้อร้องกับคอร์ดไว้</span></div>
                 <textarea id="chordText" rows="16" spellcheck="false" placeholder="[Intro] [G] [D] [Em] [C]\n\n[Verse 1]\n[G]ใส่เนื้อเพลงตรงนี้ [D]\n[Em]และวางคอร์ดไว้ในวงเล็บ [C]\n\n[Chorus]\n[G]ร้องท่อนฮุคตรงนี้ [D]"></textarea>
               </label>
               <details class="help-details"><summary>วิธีกรอกคอร์ด</summary><p>พิมพ์หรือวางเนื้อเพลงพร้อมคอร์ดลงในช่องนี้ได้เลย ใช้รูปแบบคอร์ดในวงเล็บ เช่น <code>[G]</code> หรือวางคอร์ดเป็นแถว เช่น <code>G C</code></p></details>
@@ -94,6 +97,8 @@
             <section class="preview-panel">
               <div class="preview-toolbar">
                 <div class="preview-label"><span class="live-dot"></span> แสดงตัวอย่าง</div>
+                <button type="button" class="quiet-button" id="previewFitButton" aria-pressed="false">จัดหน้าให้อ่านครบ</button>
+                <button type="button" class="quiet-button" id="previewColumnsButton" aria-pressed="false">สองคอลัมน์</button>
                 <div class="reader-controls">
                   <label class="key-control">แสดงคีย์ <select id="keySelect" aria-label="เลือกคีย์ที่แสดง"></select></label>
                   <label class="spacing-control" title="ปรับขนาดตัวอักษร"><span>ก</span><input id="fontSizeRange" type="range" min="12" max="22" value="16" /><span class="large-a">ก</span></label>
@@ -114,7 +119,7 @@
               <ol id="readerQueue" class="reader-queue-list" aria-label="เพลงทั้งหมดในชุด"></ol>
             </aside>
           <div class="reader-card">
-            <div class="reader-song-heading"><div><p class="eyebrow" id="readerArtist"></p><h1 id="readerTitle"></h1></div><div class="reader-tools"><label class="key-control"><span id="readerKeyLabel">คีย์แสดงผล</span><select id="readerKeySelect" aria-label="เลือกคีย์แสดงผล"></select></label><button id="readerSourceKeyButton" class="quiet-button" title="กลับไปคีย์ต้นฉบับ">คีย์ต้นฉบับ</button><label class="spacing-control"><span>ก</span><input id="readerFontSize" type="range" min="14" max="28" value="20" /><span class="large-a">ก</span></label><label class="line-control">บรรทัด <input id="readerLineSpacing" type="range" min="12" max="21" value="17" /></label></div></div>
+            <div class="reader-song-heading"><div><p class="eyebrow" id="readerArtist"></p><h1 id="readerTitle"></h1></div><div class="reader-tools"><label class="key-control"><span id="readerKeyLabel">คีย์แสดงผล</span><select id="readerKeySelect" aria-label="เลือกคีย์แสดงผล"></select></label><button id="readerSourceKeyButton" class="quiet-button" title="กลับไปคีย์ต้นฉบับ">คีย์ต้นฉบับ</button><button id="readerFitButton" class="quiet-button" aria-pressed="false">จัดหน้าให้อ่านครบ</button><button id="readerColumnsButton" class="quiet-button" aria-pressed="false">สองคอลัมน์</button><label class="spacing-control"><span>ก</span><input id="readerFontSize" type="range" min="14" max="28" value="20" /><span class="large-a">ก</span></label><label class="line-control">บรรทัด <input id="readerLineSpacing" type="range" min="12" max="21" value="17" /></label></div></div>
             <p id="readerKeyScopeHint" class="reader-key-scope-hint" role="status"></p>
             <div id="readerChords" class="reader-chords"></div>
           </div>

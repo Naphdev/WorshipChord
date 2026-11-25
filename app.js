@@ -20,6 +20,7 @@ let readerContext = 'library';
 let editingGroupId = null;
 let authUser = null;
 let offlineMode = false;
+let previousFormatText = null;
 let songOrderRevision = 0;
 let syncInProgress = false;
 let reconnectInProgress = false;
@@ -1084,10 +1085,23 @@ function renderSongRows() {
     return;
   }
   const query = $('searchInput').value.trim().toLowerCase();
-  const visible = songs.filter((song) => `${song.title} ${song.artist || ''}`.toLowerCase().includes(query));
+  const visible = songs.filter((song) => `${song.title} ${song.artist || ''} ${song.text || ''}`.toLowerCase().includes(query));
+  const results = $('searchResults');
+  results.hidden = !query;
+  $('searchHelp').hidden = Boolean(query);
+  if (query) {
+    const markup = visible.map((song) => {
+      const title = (song.title || '').toLowerCase().includes(query);
+      const artist = (song.artist || '').toLowerCase().includes(query);
+      const source = title ? 'ชื่อเพลง' : artist ? 'ศิลปิน/ผู้แต่ง' : ((song.text || '').match(/\[[^\]]+\]/g) || []).some((chord) => chord.toLowerCase().includes(query)) ? 'คอร์ด' : 'เนื้อเพลง';
+      return `<button type="button" class="search-result" data-open-search-song="${escapeHtml(song.id)}"><strong>${escapeHtml(song.title || 'เพลงไม่มีชื่อ')}</strong><span>${escapeHtml(song.artist || 'ไม่ระบุศิลปิน')} · พบใน${source} · คีย์ ${escapeHtml(song.key || 'C')}</span></button>`;
+    }).join('');
+    results.innerHTML = `<p class="search-result-count">${visible.length ? `พบ ${visible.length} เพลง` : 'ไม่พบเพลงที่ตรงกัน'}</p>${markup || `<button type="button" class="search-add-button" id="searchAddSongButton">＋ เพิ่มเพลง “${escapeHtml($('searchInput').value.trim())}”</button>`}`;
+  } else results.innerHTML = '';
   const shareButton = authUser && canEditActiveGroup()
     ? '<button data-action="shareGroup" title="แชร์เข้า list กลุ่ม" aria-label="แชร์เพลงเข้ากลุ่ม">แชร์</button>'
     : '';
+  $('songList').hidden = Boolean(query);
   $('songList').innerHTML = visible.map((song) => {
     const index = songs.findIndex((item) => item.id === song.id);
     const inToday = todaySetlist.songIds.includes(song.id);
@@ -1104,6 +1118,40 @@ function renderSongRows() {
   $('emptyNewSongButton').textContent = '＋ เพิ่มเพลงแรก';
   $('todaySetlistEmpty').textContent = 'กด “+ วันนี้” ที่เพลง หรือ ลากเพลงจากคลังมาวางที่นี่';
   renderTodaySongs();
+}
+
+function normalizeChordSpacing(value) {
+  const trimmed = String(value || '').split(/\r?\n/).map((line) => line.replace(/[\t ]+$/g, ''));
+  const compact = [];
+  let blank = false;
+  for (const line of trimmed) {
+    if (!line.trim()) { if (!blank) compact.push(''); blank = true; }
+    else { compact.push(line); blank = false; }
+  }
+  while (compact[0] === '') compact.shift();
+  while (compact.at(-1) === '') compact.pop();
+  return compact.join('\n');
+}
+
+function setFitLayout(container, fit, columns) {
+  container.classList.toggle('fit-layout', fit);
+  container.classList.toggle('two-columns', columns);
+  const existing = container.querySelector(':scope > .song-columns');
+  if (existing) {
+    const nodes = [...existing.querySelectorAll(':scope > .song-column > *')];
+    existing.replaceWith(...nodes);
+  }
+  if (columns && window.matchMedia('(min-width: 761px)').matches) {
+    const nodes = [...container.children];
+    const wrapper = document.createElement('div');
+    wrapper.className = 'song-columns';
+    const left = document.createElement('div'); left.className = 'song-column';
+    const right = document.createElement('div'); right.className = 'song-column';
+    const splitAt = Math.ceil(nodes.length / 2);
+    nodes.forEach((node, index) => (index < splitAt ? left : right).append(node));
+    wrapper.append(left, right);
+    container.append(wrapper);
+  }
 }
 
 function todaySongs() {
@@ -1166,11 +1214,23 @@ function renderChordContent(target, song, key) {
   const text = displayText(song, key);
   const lines = text.split(/\r?\n/);
   const title = target.classList.contains('reader-chords') ? '' : `<h2 class="song-title-preview">${escapeHtml(song.title || 'เพลงไม่มีชื่อ')}</h2><p class="song-artist-preview">${escapeHtml(song.artist || '')}</p>`;
-  const body = lines.map((line) => {
-    const section = /^\s*\[(?!\s*[A-G][#b]?(?:m|maj|sus|dim|aug|add|[0-9]|\/|\s|\)|\()*)[^\]]+\]\s*$/.test(line);
-    return `<div class="song-line ${section ? 'section-line' : ''}">${line.trim() ? chordHtml(line) : '&nbsp;'}</div>`;
-  }).join('');
-  target.innerHTML = `${title}${body}`;
+  const isSection = (line) => /^\s*\[(?!\s*[A-G][#b]?(?:m|maj|sus|dim|aug|add|[0-9]|\/|\s|\)|\()*)[^\]]+\]\s*$/.test(line);
+  const isChordRow = (line) => {
+    const tokens = line.trim().split(/\s+/).filter(Boolean);
+    return tokens.length > 0 && !/[\u0E00-\u0E7F]/.test(line) && tokens.every((token) => /^[|,;:/]+$/.test(token) || strictChordToken(token));
+  };
+  const renderLine = (line, extra = '') => `<div class="song-line ${extra}">${line.trim() ? chordHtml(line) : '&nbsp;'}</div>`;
+  const body = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (isSection(line)) { body.push(`<div class="song-pair section-pair">${renderLine(line, 'section-line')}</div>`); continue; }
+    if (isChordRow(line) && lines[i + 1]?.trim() && !isSection(lines[i + 1])) {
+      body.push(`<div class="song-pair">${renderLine(line)}${renderLine(lines[++i])}</div>`);
+    } else body.push(`<div class="song-pair">${renderLine(line)}</div>`);
+  }
+  const renderedBody = body.join('');
+  target.innerHTML = `${title}${renderedBody}`;
+  if (target.classList.contains('two-columns')) setFitLayout(target, target.classList.contains('fit-layout'), true);
 }
 
 function updatePreview() {
@@ -1793,6 +1853,37 @@ function bindEvents() {
       $('readerKeySelect').value = originalKey;
       renderChordContent($('readerChords'), currentSong, originalKey);
     }
+  });
+  $('formatSpacingButton').addEventListener('click', () => {
+    const field = $('chordText');
+    previousFormatText = field.value;
+    field.value = normalizeChordSpacing(field.value);
+    $('undoFormatButton').disabled = field.value === previousFormatText;
+    updatePreview();
+  });
+  $('undoFormatButton').addEventListener('click', () => {
+    if (previousFormatText === null) return;
+    $('chordText').value = previousFormatText;
+    previousFormatText = null;
+    $('undoFormatButton').disabled = true;
+    updatePreview();
+  });
+  for (const [fitId, columnsId, targetId] of [['previewFitButton', 'previewColumnsButton', 'songPreview'], ['readerFitButton', 'readerColumnsButton', 'readerChords']]) {
+    $(fitId).addEventListener('click', () => {
+      const button = $(fitId);
+      button.setAttribute('aria-pressed', String(button.getAttribute('aria-pressed') !== 'true'));
+      setFitLayout($(targetId), button.getAttribute('aria-pressed') === 'true', $(columnsId).getAttribute('aria-pressed') === 'true');
+    });
+    $(columnsId).addEventListener('click', () => {
+      const button = $(columnsId);
+      button.setAttribute('aria-pressed', String(button.getAttribute('aria-pressed') !== 'true'));
+      setFitLayout($(targetId), $(fitId).getAttribute('aria-pressed') === 'true', button.getAttribute('aria-pressed') === 'true');
+    });
+  }
+  $('searchResults').addEventListener('click', (event) => {
+    const result = event.target.closest('[data-open-search-song]');
+    if (result) openReader(songs.find((song) => song.id === result.dataset.openSearchSong));
+    if (event.target.closest('#searchAddSongButton')) { openEditor(makeBlankSong()); $('songTitle').value = $('searchInput').value.trim(); }
   });
   $('saveSongButton').addEventListener('click', saveCurrentSong);
   $('searchInput').addEventListener('input', renderSongRows);
