@@ -590,6 +590,24 @@ async function handleApi(req, res, url) {
   if (pathParts[1] === 'groups' && pathParts[2]) {
     const groupId = pathParts[2];
     const { group, member } = await requireGroup(groupId, user._id);
+    if (pathParts[3] === 'members' && method === 'GET') {
+      const query = String(url.searchParams.get('q') || '').trim().slice(0, 80).toLocaleLowerCase('th-TH');
+      const requestedRole = String(url.searchParams.get('role') || '');
+      const role = ['owner', 'editor', 'viewer'].includes(requestedRole) ? requestedRole : '';
+      const offset = Math.max(0, Math.min(100000, Number.parseInt(url.searchParams.get('offset') || '0', 10) || 0));
+      const limit = Math.max(1, Math.min(50, Number.parseInt(url.searchParams.get('limit') || '25', 10) || 25));
+      const filtered = (group.members || []).filter((item) => {
+        const name = String(item.displayName || '').toLocaleLowerCase('th-TH');
+        return (!role || item.role === role) && (!query || name.includes(query));
+      });
+      const members = filtered.slice(offset, offset + limit).map((item) => ({
+        userId: item.userId.toString(),
+        displayName: item.displayName || 'สมาชิก WorshipChord',
+        role: item.role,
+        joinedAt: item.joinedAt
+      }));
+      return json(res, 200, { members, total: filtered.length, offset, limit });
+    }
     if (pathParts.length === 3 && method === 'GET') {
       const songIds = group.songIds || [];
       const songs = await database.collection('groupSongs').find({ groupId: group._id, _id: { $in: songIds } }).toArray();

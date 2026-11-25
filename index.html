@@ -17,9 +17,8 @@
           <span>Worship<span class="brand-light">Chord</span></span>
         </a>
         <div class="top-actions">
-          <button class="icon-button" id="backupButton" title="สำรองข้อมูล" aria-label="สำรองข้อมูล">⇧</button>
-          <button class="icon-button notification-button" id="inboxButton" title="กล่องแจ้งเตือน" aria-label="กล่องแจ้งเตือน" hidden>♢<span id="inboxBadge" class="notification-badge" hidden></span></button>
-          <button class="quiet-button account-button" id="accountButton">เข้าสู่ระบบ</button>
+          <button class="icon-button notification-button" id="inboxButton" title="กล่องแจ้งเตือน" aria-label="กล่องแจ้งเตือน" hidden><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><span id="inboxBadge" class="notification-badge" hidden></span></button>
+          <button class="quiet-button account-button" id="accountButton"><svg class="ui-icon account-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.2"/><path d="M5.5 20c.5-3.3 2.8-5.2 6.5-5.2s6 1.9 6.5 5.2"/></svg><span id="accountButtonLabel">เข้าสู่ระบบ</span></button>
           <button class="primary-button" id="newSongButton">＋ <span>เพิ่มเพลง</span></button>
         </div>
       </header>
@@ -34,11 +33,15 @@
             </div>
             <span class="local-badge"><span></span> <span id="localBadgeText">เข้าสู่ระบบเพื่อดูเพลง</span></span>
           </div>
+          <div class="library-data-tools" aria-label="จัดการไฟล์เพลง">
+            <button class="quiet-button" id="backupButton" title="ส่งออกเพลงของฉันและเพลงวันนี้"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 16v4h14v-4"/></svg><span>ส่งออกเพลง</span></button>
+            <button class="quiet-button" id="importBackupButton" title="นำเข้าเพลงจากไฟล์สำรอง"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m0 0L8 8m4-4 4 4M5 14v6h14v-6"/></svg><span>นำเข้าเพลงจากไฟล์</span></button>
+            <span class="data-tools-hint">ย้ายเพลงและเพลงวันนี้ไปยังอีกบัญชีหรือแชร์กับสมาชิกกลุ่มได้ · ข้ามเพลงซ้ำ</span>
+            <input id="backupFile" type="file" accept="application/json,.json" hidden />
+          </div>
           <div id="connectivityBanner" class="connectivity-banner" role="status" aria-live="polite" hidden><span id="connectivityText"></span><button id="syncNowButton" type="button" class="quiet-button" hidden>ลองเชื่อมต่อ</button></div>
           <div class="library-tools">
             <label class="search-box"><span aria-hidden="true">⌕</span><input id="searchInput" type="search" placeholder="ค้นหาชื่อเพลง ศิลปิน เนื้อร้อง หรือคอร์ด" aria-describedby="searchHelp" /></label>
-            <button class="quiet-button" id="importBackupButton">นำเข้าข้อมูล</button>
-            <input id="backupFile" type="file" accept="application/json,.json" hidden />
           </div>
           <p id="searchHelp" class="search-help">ค้นหาได้จากชื่อเพลง ศิลปิน เนื้อร้อง หรือคอร์ด</p>
           <div id="searchResults" class="search-results" aria-live="polite" hidden></div>
@@ -53,8 +56,10 @@
           <section id="groupPanel" class="group-panel" hidden aria-labelledby="groupHeading">
             <div class="group-heading">
               <div><p class="eyebrow">SHARED WORSHIP SET</p><h2 id="groupHeading">กลุ่มเพลง</h2></div>
-              <div class="group-tools"><select id="groupSelect" aria-label="เลือกกลุ่มเพลง"></select><button class="quiet-button" id="createGroupButton">＋ สร้างกลุ่ม</button><button class="quiet-button" id="addGroupSongButton" hidden>＋ เพิ่มเพลงในกลุ่ม</button><button class="quiet-button" id="inviteGroupButton" disabled>เชิญสมาชิก</button></div>
+              <div class="group-tools"><select id="groupSelect" aria-label="เลือกกลุ่มเพลง"></select><button class="quiet-button" id="prepareOfflineGroupButton" disabled aria-describedby="groupOfflineHelp" title="บันทึกสำเนาเพลงกลุ่มลงอุปกรณ์นี้ เพื่อเปิดดูได้เมื่อไม่มีอินเทอร์เน็ต">บันทึกไว้ดูออฟไลน์</button><button class="quiet-button" id="createGroupButton">＋ สร้างกลุ่ม</button><button class="quiet-button" id="addGroupSongButton" hidden>＋ เพิ่มเพลงในกลุ่ม</button><button class="quiet-button" id="inviteGroupButton" disabled>เชิญสมาชิก</button></div>
             </div>
+            <p id="groupOfflineHelp" class="group-offline-help" hidden></p>
+            <p id="groupOfflineStatus" class="group-offline-status" role="status" hidden></p>
             <p id="groupEmptyState" class="group-empty">สร้างกลุ่มเพื่อแชร์เพลงและลำดับเพลงกับทีมแบบเรียลไทม์</p>
             <p id="groupDropHint" class="group-drop-hint" hidden>ลากเพลงจากคลังมาวางในกลุ่มนี้ หรือใช้ปุ่ม “แชร์”</p>
             <div id="groupMembers" class="group-members"></div>
@@ -97,7 +102,7 @@
             <section class="preview-panel">
               <div class="preview-toolbar">
                 <div class="preview-label"><span class="live-dot"></span> แสดงตัวอย่าง</div>
-                <button type="button" class="quiet-button" id="previewFitButton" aria-pressed="false">จัดหน้าให้อ่านครบ</button>
+                <button type="button" class="quiet-button" id="previewFitButton" aria-pressed="false" title="ลดขนาดตัวอักษรและระยะห่าง เพื่อให้เห็นเนื้อหาได้มากขึ้น">จัดรูปแบบ</button>
                 <button type="button" class="quiet-button" id="previewColumnsButton" aria-pressed="false">สองคอลัมน์</button>
                 <div class="reader-controls">
                   <label class="key-control">แสดงคีย์ <select id="keySelect" aria-label="เลือกคีย์ที่แสดง"></select></label>
@@ -119,7 +124,7 @@
               <ol id="readerQueue" class="reader-queue-list" aria-label="เพลงทั้งหมดในชุด"></ol>
             </aside>
           <div class="reader-card">
-            <div class="reader-song-heading"><div><p class="eyebrow" id="readerArtist"></p><h1 id="readerTitle"></h1></div><div class="reader-tools"><label class="key-control"><span id="readerKeyLabel">คีย์แสดงผล</span><select id="readerKeySelect" aria-label="เลือกคีย์แสดงผล"></select></label><button id="readerSourceKeyButton" class="quiet-button" title="กลับไปคีย์ต้นฉบับ">คีย์ต้นฉบับ</button><button id="readerFitButton" class="quiet-button" aria-pressed="false">จัดหน้าให้อ่านครบ</button><button id="readerColumnsButton" class="quiet-button" aria-pressed="false">สองคอลัมน์</button><label class="spacing-control"><span>ก</span><input id="readerFontSize" type="range" min="14" max="28" value="20" /><span class="large-a">ก</span></label><label class="line-control">บรรทัด <input id="readerLineSpacing" type="range" min="12" max="21" value="17" /></label></div></div>
+            <div class="reader-song-heading"><div><p class="eyebrow" id="readerArtist"></p><h1 id="readerTitle"></h1></div><div class="reader-tools"><label class="key-control"><span id="readerKeyLabel">คีย์แสดงผล</span><select id="readerKeySelect" aria-label="เลือกคีย์แสดงผล"></select></label><button id="readerSourceKeyButton" class="quiet-button" title="กลับไปคีย์ต้นฉบับ">คีย์ต้นฉบับ</button><button id="readerFitButton" class="quiet-button" aria-pressed="false" title="ลดขนาดตัวอักษรและระยะห่าง เพื่อให้เห็นเนื้อหาได้มากขึ้น">จัดรูปแบบ</button><button id="readerColumnsButton" class="quiet-button" aria-pressed="false">สองคอลัมน์</button><label class="spacing-control"><span>ก</span><input id="readerFontSize" type="range" min="14" max="28" value="20" /><span class="large-a">ก</span></label><label class="line-control">บรรทัด <input id="readerLineSpacing" type="range" min="12" max="21" value="17" /></label></div></div>
             <p id="readerKeyScopeHint" class="reader-key-scope-hint" role="status"></p>
             <div id="readerChords" class="reader-chords"></div>
           </div>
@@ -174,6 +179,13 @@
           <button class="primary-button" type="submit">ส่งคำเชิญ</button>
         </form>
       </dialog>
+      <dialog id="groupMembersDialog" class="app-dialog group-members-dialog">
+        <div class="dialog-heading"><div><h2>สมาชิกกลุ่ม</h2><p id="memberDialogSubtitle" class="hint"></p></div><button type="button" class="icon-button" data-close-dialog="groupMembersDialog" aria-label="ปิด">×</button></div>
+        <div class="member-directory-tools"><label class="search-box"><span aria-hidden="true">⌕</span><input id="memberSearchInput" type="search" placeholder="ค้นหาชื่อสมาชิก" /></label><select id="memberRoleFilter" aria-label="กรองตามสิทธิ์"><option value="">ทุกสิทธิ์</option><option value="owner">เจ้าของกลุ่ม</option><option value="editor">แก้ไขเพลง</option><option value="viewer">ดูเพลง</option></select></div>
+        <div id="groupMemberList" class="group-member-list member-directory-list" aria-live="polite"></div>
+        <p id="memberDirectoryEmpty" class="group-empty" hidden>ไม่พบสมาชิกที่ตรงกัน</p>
+        <div class="member-pagination"><span id="memberPageSummary"></span><div><button type="button" class="quiet-button" id="memberPrevPage">ก่อนหน้า</button><button type="button" class="quiet-button" id="memberNextPage">ถัดไป</button></div></div>
+      </dialog>
       <dialog id="syncConflictDialog" class="app-dialog sync-conflict-dialog">
         <div class="dialog-heading"><h2 id="syncConflictTitle">พบเพลงที่แก้จากอุปกรณ์อื่น</h2></div>
         <p id="syncConflictSummary" class="sync-conflict-summary"></p>
@@ -182,6 +194,12 @@
           <button id="syncConflictOffline" class="primary-button" type="button">ใช้ฉบับในเครื่อง</button>
           <button id="syncConflictBoth" class="quiet-button" type="button">เก็บทั้งสองฉบับ</button>
         </div>
+      </dialog>
+      <dialog id="importPreviewDialog" class="app-dialog">
+        <div class="dialog-heading"><h2>ตรวจไฟล์ก่อนนำเข้า</h2><button type="button" class="icon-button" data-close-dialog="importPreviewDialog" aria-label="ปิด">×</button></div>
+        <p id="importPreviewSummary" class="sync-conflict-summary"></p>
+        <p class="hint">เพลงจะถูกเพิ่มในบัญชีนี้ ส่วนเพลงชื่อและศิลปินซ้ำจะข้ามให้อัตโนมัติ</p>
+        <div class="dialog-actions"><button type="button" class="quiet-button" data-close-dialog="importPreviewDialog">ยกเลิก</button><button type="button" class="primary-button" id="confirmImportButton">นำเข้าเพลง</button></div>
       </dialog>
     </div>
     <script src="/app.js?v=account-recovery-and-public-id-1" defer></script>
