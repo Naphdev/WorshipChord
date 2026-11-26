@@ -37,6 +37,7 @@ await loadLocalEnv();
 
 const PORT = Number(process.env.PORT || 8000);
 const HOST = process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
+const ALLOWED_ORIGINS = new Set(String(process.env.FRONTEND_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean));
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) { super(message); this.status = status; this.extra = extra; }
@@ -65,7 +66,8 @@ function json(res, status, body, headers = {}) {
 
 function cookieOptions(maxAge = SESSION_DAYS * 24 * 60 * 60) {
   const secure = process.env.SESSION_SECURE === 'true' || process.env.NODE_ENV === 'production';
-  return `Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
+  const sameSite = secure && ALLOWED_ORIGINS.size ? 'None' : 'Lax';
+  return `Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
 }
 
 function parseCookies(header = '') {
@@ -155,7 +157,7 @@ function assertSameOrigin(req) {
   const origin = req.headers.origin;
   if (!origin) return;
   try {
-    if (new URL(origin).host !== req.headers.host) throw new HttpError(403, 'Cross-origin request rejected.');
+    if (new URL(origin).host !== req.headers.host && !ALLOWED_ORIGINS.has(new URL(origin).origin)) throw new HttpError(403, 'Cross-origin request rejected.');
   } catch (error) {
     if (error instanceof HttpError) throw error;
     throw new HttpError(403, 'Cross-origin request rejected.');
@@ -288,6 +290,15 @@ async function readUserLibrary(user) {
 async function handleApi(req, res, url) {
   const pathParts = url.pathname.split('/').filter(Boolean);
   const method = req.method || 'GET';
+  const origin = req.headers.origin;
+  if (origin && ALLOWED_ORIGINS.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  }
+  if (method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
   if (method !== 'GET' && method !== 'HEAD') assertSameOrigin(req);
   if (pathParts[0] !== 'api') throw new HttpError(404, 'Not found.');
   requireDatabase();
@@ -303,7 +314,7 @@ async function handleApi(req, res, url) {
       const password = String(body.password || '');
       const displayName = String(body.displayName || '').trim().slice(0, 80);
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Enter a valid email address.');
-      if (password.length < 10) throw new HttpError(400, 'Password must be at least 10 characters.');
+      if (password.length < 8) throw new HttpError(400, 'Password must be at least 8 characters.');
       const recoveryCode = randomBytes(12).toString('hex').toUpperCase().match(/.{1,6}/g).join('-');
       const user = { email, publicId: makePublicId(), passwordHash: await hashPassword(password), recoveryCodeHash: await hashPassword(normalizeRecoveryCode(recoveryCode)), displayName, createdAt: new Date() };
       try { await database.collection('users').insertOne(user); }
@@ -323,7 +334,7 @@ async function handleApi(req, res, url) {
       const email = String(body.email || '').trim().toLowerCase();
       const recoveryCode = normalizeRecoveryCode(body.recoveryCode);
       const password = String(body.password || '');
-      if (password.length < 10) throw new HttpError(400, 'รหัสผ่านใหม่ต้องมีอย่างน้อย 10 ตัวอักษร');
+      if (password.length < 8) throw new HttpError(400, 'รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร');
       const user = await database.collection('users').findOne({ email });
       if (!user?.recoveryCodeHash || !await verifyPassword(recoveryCode, user.recoveryCodeHash)) throw new HttpError(400, 'อีเมลหรือ recovery code ไม่ถูกต้อง หรือ code นี้ถูกใช้แล้ว');
       const changed = await database.collection('users').updateOne({ _id: user._id, recoveryCodeHash: user.recoveryCodeHash }, { $set: { passwordHash: await hashPassword(password), recoveryCodeHash: null, updatedAt: new Date() } });
@@ -1176,6 +1187,10 @@ async function serveStatic(req, res, pathname) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   try {
+    if (url.pathname === '/healthz' && req.method === 'GET') {
+      json(res, database ? 200 : 503, { ok: Boolean(database) });
+      return;
+    }
     if (url.pathname.startsWith('/api/')) await handleApi(req, res, url);
     else if (url.pathname === '/api') throw new HttpError(404, 'Not found.');
     else await serveStatic(req, res, url.pathname);

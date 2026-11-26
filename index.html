@@ -7,6 +7,7 @@
     <meta name="description" content="สมุดเพลงนมัสการพร้อมคอร์ด สำหรับมือถือและแท็บเล็ต" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="stylesheet" href="/styles.css" />
+    <script src="/runtime-config.js"></script>
     <title>WorshipChord — สมุดเพลง</title>
   </head>
   <body>
@@ -187,7 +188,7 @@
         <form id="accountForm" class="dialog-form">
           <label id="displayNameField" class="field-label" hidden>ชื่อที่แสดง<input id="accountDisplayName" autocomplete="name" /></label>
           <label class="field-label">อีเมล<input id="accountEmail" type="email" autocomplete="email" required /></label>
-          <label class="field-label">รหัสผ่าน<input id="accountPassword" type="password" autocomplete="current-password" minlength="10" required /><span class="hint">อย่างน้อย 10 ตัวอักษร</span></label>
+          <label class="field-label">รหัสผ่าน<input id="accountPassword" type="password" autocomplete="current-password" minlength="8" required /><span class="hint">อย่างน้อย 8 ตัวอักษร</span></label>
           <p id="accountError" class="dialog-error" hidden></p>
           <button id="accountSubmitButton" class="primary-button" type="submit">เข้าสู่ระบบ</button>
           <button id="accountModeButton" class="text-button" type="button">ยังไม่มีบัญชี? สมัครสมาชิก</button>
@@ -210,7 +211,7 @@
         <form id="resetPasswordForm" class="dialog-form">
           <label class="field-label">อีเมลบัญชี<input id="resetEmail" type="email" autocomplete="username" required /></label>
           <label class="field-label">Recovery code<input id="resetRecoveryCode" autocomplete="off" required /><span class="hint">ใส่รหัสกู้บัญชีที่บันทึกไว้ตอนสมัคร</span></label>
-          <label class="field-label">รหัสผ่านใหม่<input id="resetNewPassword" type="password" minlength="10" autocomplete="new-password" required /></label>
+          <label class="field-label">รหัสผ่านใหม่<input id="resetNewPassword" type="password" minlength="8" autocomplete="new-password" required /></label>
           <p id="resetPasswordError" class="dialog-error" hidden></p>
           <button class="primary-button" type="submit">เปลี่ยนรหัสผ่าน</button>
         </form>

@@ -1,6 +1,7 @@
 const DB_NAME = 'worshipchord-local';
 const DB_VERSION = 4;
 const TODAY_SETLIST_ID = 'today';
+const API_BASE = String(window.WORSHIPCHORD_CONFIG?.apiBase || '').replace(/\/+$/, '');
 const LAST_USER_KEY = `${DB_NAME}-last-user`;
 const KEYS = ['C', 'C♯/D♭', 'D', 'D♯/E♭', 'E', 'F', 'F♯/G♭', 'G', 'G♯/A♭', 'A', 'A♯/B♭', 'B'];
 const SHARP_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
@@ -786,7 +787,7 @@ async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   let response;
-  try { response = await fetch(path, { ...options, headers, credentials: 'same-origin' }); }
+  try { response = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: 'include' }); }
   catch (error) {
     if (authUser) await enterOfflineMode('อินเทอร์เน็ตหรือเซิร์ฟเวอร์ขาดการเชื่อมต่อ');
     throw error;
@@ -1324,8 +1325,9 @@ async function prepareActiveGroupOffline() {
 function connectRealtime() {
   realtimeSocket?.close();
   if (!authUser || offlineMode || !window.WebSocket) return;
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const socket = new WebSocket(`${protocol}//${location.host}/realtime`);
+  const socketUrl = new URL(`${API_BASE || location.origin}/realtime`);
+  socketUrl.protocol = socketUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+  const socket = new WebSocket(socketUrl);
   realtimeSocket = socket;
   socket.addEventListener('open', () => {
     if (activeGroup) socket.send(JSON.stringify({ type: 'subscribe', groupId: activeGroup.id }));

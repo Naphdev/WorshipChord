@@ -1,5 +1,5 @@
-const CACHE = 'worshipchord-v42';
-const APP_FILES = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest', '/icon.svg'];
+const CACHE = 'worshipchord-v44';
+const APP_FILES = ['/', '/index.html', '/runtime-config.js', '/styles.css', '/app.js', '/manifest.webmanifest', '/icon.svg'];
 self.addEventListener('install', (event) => event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(APP_FILES)).then(() => self.skipWaiting())));
 self.addEventListener('activate', (event) => event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', (event) => {

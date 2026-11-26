@@ -24,6 +24,21 @@ npm start
 
 ถ้าเบราว์เซอร์มีเพลงจากเวอร์ชันเก่าที่เก็บไว้ในเครื่อง ระบบจะถามก่อนนำเข้าเพลงเหล่านั้นไปยังบัญชีที่กำลังเข้าสู่ระบบ
 
+## Deploy: Vercel + Render
+
+หน้าเว็บเป็น static site บน Vercel; API และ WebSocket ทำงานเป็น Node.js web service บน Render. เริ่มจาก Render เพราะต้องใช้ URL ของ API เพื่อกำหนด Vercel build variable.
+
+1. ใน Render เลือก **New → Blueprint** แล้วเชื่อม repo นี้เพื่อใช้ไฟล์ render.yaml; เลือก region Singapore และ Free plan.
+2. กรอก MONGODB_URI ด้วย Atlas connection string และ FRONTEND_ORIGINS เป็น Vercel production URL แบบตรงตัว เช่น https://worshipchord.vercel.app (ตั้งค่านี้หลังสร้าง Vercel project ได้).
+3. รอ Render deploy แล้วจด URL เช่น https://worshipchord-api.onrender.com.
+4. ใน Vercel import repo นี้ ตั้ง Framework เป็น **Other** และ environment variable RENDER_BACKEND_URL เป็น Render URL ข้างต้น (ไม่เติม path หรือ slash ท้าย) แล้ว deploy.
+5. นำ production URL ที่ Vercel ให้มาใส่ใน Render FRONTEND_ORIGINS แบบตรงตัว แล้ว redeploy Render.
+6. เปิด Vercel URL ทดสอบสมัคร/เข้าสู่ระบบ, อ่าน/แก้เพลง, กลุ่ม และ WebSocket. หากใช้ Vercel preview URL เพิ่มโดเมนนั้นใน FRONTEND_ORIGINS ชั่วคราว.
+
+Render สร้าง SESSION_SECRET ให้อัตโนมัติจาก Blueprint. อย่าใส่ Atlas URI หรือ secret ใน Vercel; เก็บไว้ใน Render Environment. Backend ใช้ CORS allowlist และ secure cross-site cookie สำหรับ URL แยกโดเมน. Safari/iOS อาจจำกัด third-party cookies ระหว่างโดเมนฟรีของ Vercel กับ Render; การล็อกอินข้ามโดเมนอาจไม่เสถียรจนกว่าจะใช้ custom domain ที่อยู่ใน site เดียวกัน.
+
+แผน Render Free อาจหยุดเมื่อไม่มีทราฟฟิก 15 นาทีและใช้เวลาประมาณหนึ่งนาทีในการกลับมาออนไลน์; ใช้ทดสอบ/ทดลองได้ แต่ไม่เหมาะกับการเล่นสดที่ต้องพร้อมตลอด. WebSocket จะตัดตอน service restart แล้วแอปจะเชื่อมใหม่. ข้อมูลถาวรเก็บใน Atlas ไม่เก็บบน filesystem ของ Render.
+
 ## เปิดจากมือถือในเครือข่ายเดียวกัน
 
 บนเครื่องที่รัน Node.js ตั้ง `HOST=0.0.0.0` ใน `.env` แล้วเปิดพอร์ต 8000 ใน firewall ของเครือข่ายส่วนตัว จาก iPad/มือถือเข้า `http://<IP-ของเครื่องที่รันแอป>:8000` ได้ โหมดนี้มีไว้ทดลองบน Wi-Fi เดียวกัน; การเผยแพร่สู่ภายนอกและติดตั้ง PWA ควรใช้ HTTPS และไม่ควรเปิด MongoDB ให้เข้าถึงสาธารณะ
