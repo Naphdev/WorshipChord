@@ -1514,8 +1514,29 @@ async function copyGroupSongToLibrary(songId) {
   }
 }
 
+async function refreshInvalidGroupSongId() {
+  if (/^[a-f\d]{24}$/i.test(String(currentSong?.id || ''))) return true;
+  if (!activeGroup || offlineMode) return false;
+  const title = String(currentSong?.title || '').normalize('NFC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase('th-TH');
+  const artist = String(currentSong?.artist || '').normalize('NFC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase('th-TH');
+  try {
+    await loadActiveGroup();
+    const candidates = readerContext === 'groupLibrary' ? sharedSongs : activeSetSongs;
+    const refreshed = candidates.find((song) => /^[a-f\d]{24}$/i.test(String(song.id || ''))
+      && String(song.title || '').normalize('NFC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase('th-TH') === title
+      && String(song.artist || '').normalize('NFC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase('th-TH') === artist);
+    if (!refreshed) return false;
+    currentSong = refreshed;
+    return true;
+  } catch { return false; }
+}
+
 async function setGroupDisplayKey(key) {
   if (readerContext !== 'group' || !currentSong || !activeGroup || !activeWeeklySet || (!canEditActiveGroup() && !(offlineMode && offlineGroupSnapshot))) return false;
+  if (!offlineMode && !await refreshInvalidGroupSongId()) {
+    notify('รหัสเพลงในหน้าที่เปิดไม่ตรงกับคลังกลุ่มล่าสุด โหลดเพลงใหม่แล้วลองเปลี่ยนคีย์อีกครั้ง');
+    return false;
+  }
   if (key === (currentSong.displayKey || currentSong.key || 'C')) return true;
   if (offlineMode && offlineGroupSnapshot) {
     currentSong = { ...currentSong, displayKey: key };
@@ -1588,6 +1609,10 @@ function setReaderKeyGuidance(context) {
 
 async function setGroupLibraryDisplayKey(key) {
   if (!currentSong || !activeGroup || !canEditActiveGroup() || offlineMode) return false;
+  if (!await refreshInvalidGroupSongId()) {
+    notify('รหัสเพลงในหน้าที่เปิดไม่ตรงกับคลังกลุ่มล่าสุด โหลดเพลงใหม่แล้วลองเปลี่ยนคีย์อีกครั้ง');
+    return false;
+  }
   if (key === (currentSong.displayKey || currentSong.key || 'C')) return true;
   try {
     const result = await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/songs/${encodeURIComponent(currentSong.id)}/display-key`, { method: 'PATCH', body: JSON.stringify({ key, expectedRevision: currentSong.revision || 1 }) });
