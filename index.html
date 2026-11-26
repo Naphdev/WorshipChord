@@ -34,9 +34,8 @@
             <span class="local-badge"><span></span> <span id="localBadgeText">เข้าสู่ระบบเพื่อดูเพลง</span></span>
           </div>
           <div class="library-data-tools" aria-label="จัดการไฟล์เพลง">
-            <button class="quiet-button" id="backupButton" title="ส่งออกเพลงของฉันและเพลงวันนี้"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 16v4h14v-4"/></svg><span>ส่งออกเพลง</span></button>
-            <button class="quiet-button" id="importBackupButton" title="นำเข้าเพลงจากไฟล์สำรอง"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m0 0L8 8m4-4 4 4M5 14v6h14v-6"/></svg><span>นำเข้าเพลงจากไฟล์</span></button>
-            <span class="data-tools-hint">ย้ายเพลงและเพลงวันนี้ไปยังอีกบัญชีหรือแชร์กับสมาชิกกลุ่มได้ · ข้ามเพลงซ้ำ</span>
+            <button class="quiet-button" id="backupButton" title="ส่งออกหรือนำเข้าไฟล์เพลง"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8m0 0 4-4m-4 4L8 7M5 13v7h14v-7m-7 0v7"/></svg><span>นำเข้า / ส่งออก</span></button>
+            <span class="data-tools-hint">ย้ายเพลงระหว่างบัญชี หรือสำรองคลังเพลงกลุ่ม</span>
             <input id="backupFile" type="file" accept="application/json,.json" hidden />
           </div>
           <div id="connectivityBanner" class="connectivity-banner" role="status" aria-live="polite" hidden><span id="connectivityText"></span><button id="syncNowButton" type="button" class="quiet-button" hidden>ลองเชื่อมต่อ</button></div>
@@ -55,6 +54,7 @@
               <div><p class="eyebrow">SETLIST</p><h2 id="todayHeading">เพลงวันนี้</h2></div>
               <span id="todaySongCount" class="today-count">0 เพลง</span>
             </div>
+            <div id="todayBulkToolbar" class="bulk-toolbar" data-bulk-context="today" hidden></div>
             <div id="todaySongList" class="today-song-list drop-target" aria-live="polite" aria-label="ลำดับเพลงวันนี้"></div>
             <div id="todaySongsPager" class="song-pagination"></div>
             <p id="todaySetlistEmpty" class="today-empty">กด “+ วันนี้” ที่เพลง หรือ ลากเพลงจากคลังมาวางที่นี่</p>
@@ -66,25 +66,32 @@
             </div>
             <div id="weeklySetTools" class="weekly-set-tools" hidden>
               <label>ชุดที่เปิดอยู่<select id="weeklySetSelect" aria-label="เลือกชุดเพลงตามวันที่เล่น"></select></label>
-              <details id="createWeeklySetDetails" class="create-weekly-set"><summary>＋ สร้างชุดสำหรับสัปดาห์ใหม่</summary>
-                <p>เลือกวันที่เล่น แล้วเลือกว่าจะคัดลอกเพลงจากชุดที่เปิดอยู่หรือเริ่มจากชุดว่าง · หนึ่งชุดต่อสัปดาห์</p>
+              <details id="createWeeklySetDetails" class="create-weekly-set"><summary>＋ สร้างชุดเพลง</summary>
+                <p>สร้างได้หลายชุดต่อสัปดาห์และใช้วันเล่นเดียวกันได้ ตั้งชื่อแยกแต่ละชุดได้</p>
                 <label>วันที่ใช้เล่นชุดใหม่<input id="weeklyServiceDate" type="date" aria-label="วันที่ใช้เล่นชุดใหม่" /></label>
+                <label>ชื่อชุด (ไม่บังคับ)<input id="weeklyServiceName" type="text" maxlength="80" placeholder="เช่น รอบเช้า / รอบเย็น" /></label>
                 <p id="weeklyCreateDateHint" class="hint"></p>
                 <div class="create-weekly-actions"><button id="createWeeklySetButton" class="quiet-button" type="button">คัดลอกรายการเพลงชุดนี้</button><button id="createEmptyWeeklySetButton" class="quiet-button" type="button">เริ่มชุดว่าง</button></div>
               </details>
+            </div>
+            <div class="weekly-record-tools">
+              <details id="weeklyHistoryDetails" class="weekly-record-panel"><summary>ชุดย้อนหลัง <span id="weeklyHistoryCount">0 ชุด</span></summary><p>ใช้ดูชุดที่เคยเล่นหรือคัดลอกรายการมาใช้ใหม่</p><label class="search-box"><span aria-hidden="true">⌕</span><input id="weeklyHistorySearch" type="search" placeholder="ค้นชื่อชุดหรือวันที่" /></label><div id="weeklyHistoryList" class="weekly-record-list"></div></details>
+              <details id="weeklyTrashDetails" class="weekly-record-panel"><summary>ถังขยะ <span id="weeklyTrashCount">0 ชุด</span></summary><p>กู้คืนได้ภายใน 30 วัน หลังจากนั้นระบบลบถาวร</p><div id="weeklyTrashList" class="weekly-record-list"></div></details>
             </div>
             <p id="groupOfflineHelp" class="group-offline-help" hidden></p>
             <p id="groupOfflineStatus" class="group-offline-status" role="status" hidden></p>
             <p id="groupEmptyState" class="group-empty">สร้างกลุ่มเพื่อแชร์เพลงและลำดับเพลงกับทีมแบบเรียลไทม์</p>
             <p id="groupDropHint" class="group-drop-hint" hidden>ลากเพลงจากคลังส่วนตัวมาวาง เพื่อเพิ่มเพลงเข้าคลังกลุ่ม</p>
             <div id="groupMembers" class="group-members"></div>
-            <div class="weekly-songs-heading"><div><h3 id="weeklySetHeading" class="group-list-heading">เพลงในชุดสัปดาห์นี้</h3><button id="editWeeklyServiceDateButton" class="text-button" type="button" hidden>เปลี่ยนวันเล่น</button></div><button id="addGroupSongButton" class="primary-button" type="button" hidden>＋ เพิ่มเพลง</button></div>
+            <div class="weekly-songs-heading"><div><h3 id="weeklySetHeading" class="group-list-heading">เพลงในชุดสัปดาห์นี้</h3><button id="editWeeklyServiceDateButton" class="text-button" type="button" hidden>แก้วัน / ชื่อชุด</button><button id="trashWeeklySetButton" class="text-button danger-text-button" type="button" hidden>ย้ายชุดนี้ไปถังขยะ</button></div><button id="addGroupSongButton" class="primary-button" type="button" hidden>＋ เพิ่มเพลง</button></div>
+            <div id="groupSetBulkToolbar" class="bulk-toolbar" data-bulk-context="groupSet" hidden></div>
             <div id="groupSongList" class="group-song-list" aria-live="polite"></div>
             <div id="groupSongsPager" class="song-pagination"></div>
             <details id="groupLibraryDetails" class="group-library-panel">
               <summary>คลังเพลงกลุ่ม <span id="groupLibraryCount">0 เพลง</span></summary>
               <p>เพลงที่เก็บไว้ใช้ซ้ำได้ · การแก้คลังนี้ไม่เปลี่ยนชุดที่บันทึกไว้แล้ว</p>
               <label class="search-box"><span aria-hidden="true">⌕</span><input id="groupLibrarySearch" type="search" placeholder="ค้นเพลงในคลังกลุ่ม" /></label>
+              <div id="groupLibraryBulkToolbar" class="bulk-toolbar" data-bulk-context="groupLibrary" hidden></div>
               <div id="groupLibraryList" class="group-song-list" aria-live="polite"></div>
               <div id="groupLibraryPager" class="song-pagination"></div>
             </details>
@@ -94,7 +101,7 @@
               <div id="groupSuggestionList" class="group-song-list"></div>
             </details>
             <dialog id="groupSongPickerDialog" class="app-dialog">
-              <div class="dialog-heading"><div><h2>เพิ่มเพลงในชุดนี้</h2><p id="groupSongPickerWeek" class="hint"></p></div><button type="button" class="icon-button" data-close-dialog="groupSongPickerDialog" aria-label="ปิด">×</button></div>
+              <div class="dialog-heading"><div><h2 id="groupSongPickerTitle">เพิ่มเพลงในชุดนี้</h2><p id="groupSongPickerWeek" class="hint"></p></div><button type="button" class="icon-button" data-close-dialog="groupSongPickerDialog" aria-label="ปิด">×</button></div>
               <div class="song-picker-sources" role="tablist" aria-label="เลือกคลังเพลง">
                 <button type="button" role="tab" aria-selected="true" data-picker-source="group">คลังเพลงกลุ่ม</button>
                 <button type="button" role="tab" aria-selected="false" data-picker-source="personal">เพลงของฉัน</button>
@@ -105,8 +112,9 @@
             </dialog>
           </section>
           <section id="personalLibraryDropZone" class="personal-library-drop-zone" aria-label="เพลงของฉัน">
-            <div class="personal-library-heading"><div><h2>คลังส่วนตัว</h2><p>เห็นได้เฉพาะคุณ</p></div></div>
+            <div class="personal-library-heading"><div><h2>คลังส่วนตัว <span id="personalSongCount" class="library-song-count">0 เพลงทั้งหมด</span></h2><p>เห็นได้เฉพาะคุณ</p></div></div>
             <p id="libraryDropHint" class="library-drop-hint" hidden>ลากเพลงจากกลุ่มมาวางที่รายการนี้เพื่อคัดลอกเข้าเพลงของฉัน · ต้นฉบับในกลุ่มจะไม่เปลี่ยน</p>
+            <div id="personalBulkToolbar" class="bulk-toolbar" data-bulk-context="personal" hidden></div>
             <div id="songList" class="song-list" aria-live="polite"></div>
             <div id="personalSongsPager" class="song-pagination"></div>
             <div id="emptyState" class="empty-state" hidden>
@@ -189,7 +197,7 @@
       </dialog>
       <dialog id="editServiceDateDialog" class="app-dialog">
         <div class="dialog-heading"><div><h2>เปลี่ยนวันเล่น</h2><p id="editServiceDateWeek" class="hint"></p></div><button type="button" class="icon-button" data-close-dialog="editServiceDateDialog" aria-label="ปิด">×</button></div>
-        <form id="editServiceDateForm" class="dialog-form"><label class="field-label">วันที่เล่น<input id="editServiceDateInput" type="date" required /></label><p id="editServiceDateError" class="dialog-error" hidden></p><div class="dialog-actions"><button type="button" class="quiet-button" data-close-dialog="editServiceDateDialog">ยกเลิก</button><button type="submit" class="primary-button">บันทึกวันเล่น</button></div></form>
+        <form id="editServiceDateForm" class="dialog-form"><label class="field-label">วันที่เล่น<input id="editServiceDateInput" type="date" required /></label><label class="field-label">ชื่อชุด<input id="editServiceNameInput" maxlength="80" /></label><p id="editServiceDateError" class="dialog-error" hidden></p><div class="dialog-actions"><button type="button" class="quiet-button" data-close-dialog="editServiceDateDialog">ยกเลิก</button><button type="submit" class="primary-button">บันทึกชุด</button></div></form>
       </dialog>
       <dialog id="recoveryCodeDialog" class="app-dialog">
         <div class="dialog-heading"><h2>บันทึกรหัสกู้บัญชี</h2></div>
@@ -241,10 +249,15 @@
           <button id="syncConflictBoth" class="quiet-button" type="button">เก็บทั้งสองฉบับ</button>
         </div>
       </dialog>
+      <dialog id="fileTransferDialog" class="app-dialog file-transfer-dialog">
+        <div class="dialog-heading"><div><h2>จัดการไฟล์เพลง</h2><p class="hint">เลือกว่าจะส่งออกเพลงจากที่ไหน หรือนำไฟล์เข้าไปเก็บที่ใด</p></div><button type="button" class="icon-button" data-close-dialog="fileTransferDialog" aria-label="ปิด">×</button></div>
+        <section class="file-transfer-section"><h3>ส่งออกไฟล์</h3><p>ดาวน์โหลดเป็น JSON UTF-8 ซึ่งเก็บภาษาไทยและคอร์ดไว้</p><button id="exportPersonalButton" type="button" class="quiet-button">ส่งออกคลังส่วนตัว + เพลงวันนี้</button><label class="field-label">กลุ่ม<select id="exportGroupSelect"></select></label><button id="exportGroupButton" type="button" class="quiet-button">ส่งออกคลังเพลงกลุ่ม</button></section>
+        <section class="file-transfer-section"><h3>นำเข้าไฟล์</h3><label class="field-label">นำเข้าไปที่<select id="importTargetSelect"><option value="personal">คลังส่วนตัว</option><option value="today">เพลงวันนี้</option><option value="group">คลังเพลงกลุ่ม</option></select></label><label id="importGroupField" class="field-label" hidden>กลุ่มปลายทาง<select id="importGroupSelect"></select></label><p id="importTargetHelp" class="hint">เพลงใหม่จะเพิ่มในคลังส่วนตัว ส่วนเพลงซ้ำจะข้ามโดยเก็บฉบับเดิมไว้</p><button id="chooseImportFileButton" type="button" class="primary-button">เลือกไฟล์เพลง</button></section>
+      </dialog>
       <dialog id="importPreviewDialog" class="app-dialog">
         <div class="dialog-heading"><h2>ตรวจไฟล์ก่อนนำเข้า</h2><button type="button" class="icon-button" data-close-dialog="importPreviewDialog" aria-label="ปิด">×</button></div>
         <p id="importPreviewSummary" class="sync-conflict-summary"></p>
-        <p class="hint">เพลงจะถูกเพิ่มในบัญชีนี้ ส่วนเพลงชื่อและศิลปินซ้ำจะข้ามให้อัตโนมัติ</p>
+        <p id="importPreviewHelp" class="hint"></p>
         <div class="dialog-actions"><button type="button" class="quiet-button" data-close-dialog="importPreviewDialog">ยกเลิก</button><button type="button" class="primary-button" id="confirmImportButton">นำเข้าเพลง</button></div>
       </dialog>
       <dialog id="groupSettingsDialog" class="app-dialog">

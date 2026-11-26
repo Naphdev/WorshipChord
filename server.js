@@ -191,7 +191,43 @@ async function requireGroup(groupId, userId) {
   if (!group) throw new HttpError(404, 'Group not found.');
   const member = group.members.find((item) => item.userId.equals(userId));
   if (!member) throw new HttpError(403, 'Group access denied.');
+  const now = new Date();
+  for (const set of group.weeklySets || []) {
+    if (set.deletedAt && !set.expiresAt) {
+      set.expiresAt = new Date(new Date(set.deletedAt).getTime() + 30 * 24 * 60 * 60 * 1000);
+      await database.collection('groups').updateOne({ _id: group._id, 'weeklySets.id': set.id }, { $set: { 'weeklySets.$.expiresAt': set.expiresAt } });
+    }
+  }
+  const expiredSetIds = (group.weeklySets || []).filter((set) => {
+    if (!set.deletedAt) return false;
+    const expiresAt = set.expiresAt ? new Date(set.expiresAt) : new Date(new Date(set.deletedAt).getTime() + 30 * 24 * 60 * 60 * 1000);
+    return expiresAt <= now;
+  }).map((set) => set.id);
+  if (expiredSetIds.length) {
+    await database.collection('groups').updateOne({ _id: group._id }, { $pull: { weeklySets: { id: { $in: expiredSetIds } } }, $set: { updatedAt: now } });
+    group.weeklySets = (group.weeklySets || []).filter((set) => !expiredSetIds.includes(set.id));
+    notifyGroup(group, { type: 'group.changed', groupId: group._id.toString(), change: 'trash_expired', setIds: expiredSetIds });
+  }
   return { group, member };
+}
+
+async function purgeExpiredGroupTrash() {
+  if (!database) return 0;
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const condition = { deletedAt: { $exists: true }, $or: [{ expiresAt: { $lte: now } }, { expiresAt: { $exists: false }, deletedAt: { $lte: cutoff } }] };
+  const groups = await database.collection('groups').find({ weeklySets: { $elemMatch: condition } }).toArray();
+  let removed = 0;
+  for (const group of groups) {
+    const expiredIds = (group.weeklySets || []).filter((set) => set.deletedAt && (set.expiresAt ? new Date(set.expiresAt) <= now : new Date(set.deletedAt) <= cutoff)).map((set) => set.id);
+    if (!expiredIds.length) continue;
+    const result = await database.collection('groups').updateOne({ _id: group._id }, { $pull: { weeklySets: { id: { $in: expiredIds } } }, $set: { updatedAt: now } });
+    if (!result.modifiedCount) continue;
+    removed += expiredIds.length;
+    group.weeklySets = group.weeklySets.filter((set) => !expiredIds.includes(set.id));
+    notifyGroup(group, { type: 'group.changed', groupId: group._id.toString(), change: 'trash_expired', setIds: expiredIds });
+  }
+  return removed;
 }
 
 function requireEditor(member) {
@@ -415,6 +451,29 @@ async function handleApi(req, res, url) {
     notifyUser(user._id, { type: 'library.changed' });
     return json(res, 201, { song: publicSong(song) });
   }
+  if (pathParts[1] === 'library' && pathParts[2] === 'songs' && pathParts.length === 3 && method === 'DELETE') {
+    const body = await readJson(req);
+    if (!Array.isArray(body.songIds) || body.songIds.length > 500) throw new HttpError(400, 'Invalid song selection.');
+    const uniqueIds = [...new Set(body.songIds.map(String))];
+    if (uniqueIds.some((id) => !ObjectId.isValid(id))) throw new HttpError(400, 'Invalid song id.');
+    const ids = uniqueIds.map((id) => new ObjectId(id));
+    const collection = database.collection('personalSongs');
+    const selected = ids.length ? await collection.find({ ownerId: user._id, _id: { $in: ids } }).toArray() : [];
+    if (selected.length !== ids.length) throw new HttpError(400, 'Selection contains a song outside this account.');
+    if (ids.length) {
+      await collection.deleteMany({ ownerId: user._id, _id: { $in: ids } });
+      const todaySetlist = await database.collection('personalSetlists').findOne({ ownerId: user._id, id: 'today' }, { projection: { songIds: 1 } });
+      if (todaySetlist?.songIds?.some((id) => ids.some((selectedId) => selectedId.equals(id)))) {
+        await database.collection('personalSetlists').updateOne({ ownerId: user._id, id: 'today' }, { $pull: { songIds: { $in: ids } }, $inc: { revision: 1 }, $set: { updatedAt: new Date() } });
+      }
+      const remaining = await collection.find({ ownerId: user._id }).sort({ order: 1, _id: 1 }).toArray();
+      if (remaining.length) await collection.bulkWrite(remaining.map((song, order) => ({ updateOne: { filter: { _id: song._id, ownerId: user._id }, update: { $set: { order } } } })));
+      user.songOrderRevision = Number(user.songOrderRevision || 0) + 1;
+      await database.collection('users').updateOne({ _id: user._id }, { $set: { songOrderRevision: user.songOrderRevision } });
+      notifyUser(user._id, { type: 'library.changed' });
+    }
+    return json(res, 200, { ok: true, deleted: ids.length, songOrderRevision: Number(user.songOrderRevision || 0) });
+  }
   if (pathParts[1] === 'library' && pathParts[2] === 'songs' && pathParts[3] && (method === 'PUT' || method === 'DELETE')) {
     if (!ObjectId.isValid(pathParts[3])) throw new HttpError(400, 'Invalid song id.');
     const songId = new ObjectId(pathParts[3]);
@@ -552,7 +611,7 @@ async function handleApi(req, res, url) {
     const invitationIds = notifications.map((item) => item.invitationId).filter(Boolean);
     const invitations = invitationIds.length ? await database.collection('invitations').find({ _id: { $in: invitationIds } }, { projection: { status: 1 } }).toArray() : [];
     const invitationStatus = new Map(invitations.map((item) => [item._id.toString(), item.status]));
-    return json(res, 200, { notifications: notifications.map((item) => ({ id: item._id.toString(), type: item.type, invitationId: item.invitationId?.toString(), invitationStatus: item.invitationId ? invitationStatus.get(item.invitationId.toString()) : undefined, groupId: item.groupId?.toString(), groupName: item.groupName, inviterName: item.inviterName, recipientEmail: item.recipientEmail, decision: item.decision, role: item.role, readAt: item.readAt, createdAt: item.createdAt })) });
+    return json(res, 200, { notifications: notifications.map((item) => ({ id: item._id.toString(), type: item.type, invitationId: item.invitationId?.toString(), invitationStatus: item.invitationId ? invitationStatus.get(item.invitationId.toString()) : undefined, suggestionId: item.suggestionId?.toString(), suggestionStatus: item.suggestionStatus, songTitle: item.songTitle, requesterName: item.requesterName, groupId: item.groupId?.toString(), groupName: item.groupName, inviterName: item.inviterName, recipientEmail: item.recipientEmail, decision: item.decision, role: item.role, readAt: item.readAt, createdAt: item.createdAt })) });
   }
   if (pathParts[1] === 'notifications' && method === 'PATCH' && pathParts[2]) {
     if (!ObjectId.isValid(pathParts[2])) throw new HttpError(400, 'Invalid notification id.');
@@ -611,7 +670,7 @@ async function handleApi(req, res, url) {
       const updated = { ...group, name, updatedAt: new Date() };
       await database.collection('groups').updateOne({ _id: group._id }, { $set: { name, updatedAt: updated.updatedAt } });
       await database.collection('invitations').updateMany({ groupId: group._id, status: 'pending' }, { $set: { groupName: name } });
-      await database.collection('notifications').updateMany({ groupId: group._id, type: 'group_invite' }, { $set: { groupName: name } });
+      await database.collection('notifications').updateMany({ groupId: group._id, type: { $in: ['group_invite', 'group_song_suggestion'] } }, { $set: { groupName: name } });
       notifyGroup(updated, { type: 'group.changed', groupId: group._id.toString(), change: 'group_renamed' });
       for (const item of group.members) notifyUser(item.userId, { type: 'groups.changed' });
       return json(res, 200, { group: publicGroup(updated) });
@@ -654,6 +713,12 @@ async function handleApi(req, res, url) {
       if (duplicate) throw new HttpError(409, 'มีเพลงนี้อยู่ในคิวเสนอแล้ว');
       const suggestion = { groupId: group._id, song: { ...fields, sourceKeyConfirmed: false }, suggestedBy: user._id, suggestedByName: user.displayName || user.email.split('@')[0], status: 'pending', createdAt: new Date() };
       await database.collection('groupSongSuggestions').insertOne(suggestion);
+      const reviewers = (group.members || []).filter((item) => ['owner', 'editor'].includes(item.role));
+      if (reviewers.length) {
+        const createdNotifications = reviewers.map((reviewer) => ({ userId: reviewer.userId, type: 'group_song_suggestion', suggestionId: suggestion._id, groupId: group._id, groupName: group.name, songTitle: fields.title, requesterName: suggestion.suggestedByName, suggestionStatus: 'pending', readAt: null, createdAt: suggestion.createdAt }));
+        await database.collection('notifications').insertMany(createdNotifications);
+        for (const reviewer of reviewers) notifyUser(reviewer.userId, { type: 'notification.created', notificationType: 'group_song_suggestion', songTitle: fields.title, groupId: group._id.toString() });
+      }
       notifyGroup(group, { type: 'group.changed', groupId: group._id.toString(), change: 'song_suggestion' });
       return json(res, 201, { ok: true });
     }
@@ -671,6 +736,7 @@ async function handleApi(req, res, url) {
       if (!suggestion) throw new HttpError(404, 'ไม่พบรายการเสนอเพลงนี้ หรือรายการถูกจัดการไปแล้ว');
       if (body.action === 'reject') {
         await database.collection('groupSongSuggestions').updateOne({ _id: suggestionId, groupId: group._id, status: 'pending' }, { $set: { status: 'rejected', reviewedBy: user._id, reviewedAt: new Date() } });
+        await database.collection('notifications').updateMany({ suggestionId, type: 'group_song_suggestion' }, { $set: { suggestionStatus: 'rejected', readAt: new Date() } });
         notifyGroup(group, { type: 'group.changed', groupId: group._id.toString(), change: 'song_suggestion' });
         return json(res, 200, { ok: true });
       }
@@ -699,6 +765,7 @@ async function handleApi(req, res, url) {
       await database.collection('groups').updateOne({ _id: group._id }, { $addToSet: { librarySongIds: song._id }, $set: { updatedAt: new Date() } });
       const reviewed = await database.collection('groupSongSuggestions').updateOne({ _id: suggestionId, groupId: group._id, status: 'pending' }, { $set: { status: 'approved', linkedSongId: song._id, reviewedBy: user._id, reviewedAt: new Date(), reviewedKey: fields.key } });
       if (!reviewed.modifiedCount) throw new HttpError(409, 'รายการนี้ถูกจัดการจากอุปกรณ์อื่นแล้ว');
+      await database.collection('notifications').updateMany({ suggestionId, type: 'group_song_suggestion' }, { $set: { suggestionStatus: 'approved', readAt: new Date() } });
       notifyGroup(group, { type: 'group.changed', groupId: group._id.toString(), change: 'song_suggestion' });
       return json(res, 200, { ok: true, song: publicSong(song) });
     }
@@ -707,7 +774,9 @@ async function handleApi(req, res, url) {
       const legacyIds = group.songIds || [];
       const sets = group.weeklySets?.length ? group.weeklySets : [{ id: 'legacy', ...currentWeekRange(), name: 'ชุดปัจจุบัน', songIds: legacyIds }];
       if (!group.weeklySets?.length) await database.collection('groups').updateOne({ _id: group._id, weeklySets: { $exists: false } }, { $set: { weeklySets: sets, activeSetId: 'legacy', librarySongIds: legacyIds } });
-      const selectedSet = sets.find((set) => set.id === querySetId) || sets.find((set) => set.id === group.activeSetId) || sets.at(-1);
+      const availableSets = sets.filter((set) => !set.deletedAt);
+      const selectedSet = availableSets.find((set) => set.id === querySetId) || availableSets.find((set) => set.id === group.activeSetId) || availableSets.at(-1);
+      if (!selectedSet) throw new HttpError(404, 'ไม่พบชุดเพลงที่ใช้งานได้');
       const songIds = selectedSet.songIds || [];
       let songSnapshots = { ...(selectedSet.songSnapshots || {}) };
       const libraryIds = group.librarySongIds || legacyIds;
@@ -729,6 +798,39 @@ async function handleApi(req, res, url) {
       }).filter(Boolean);
       return json(res, 200, { group: publicGroup(group), activeSet: { ...selectedSet, songSnapshots }, librarySongs: libraryIds.map((id) => ordered.get(id.toString())).filter(Boolean), songs: setSongs });
     }
+    if (pathParts[3] === 'sets' && pathParts.length === 5 && method === 'DELETE') {
+      requireEditor(member);
+      const setId = pathParts[4];
+      const set = group.weeklySets?.find((item) => item.id === setId && !item.deletedAt);
+      if (!set) throw new HttpError(404, 'ไม่พบชุดเพลงนี้');
+      const remaining = (group.weeklySets || []).filter((item) => item.id !== setId && !item.deletedAt);
+      if (!remaining.length) throw new HttpError(409, 'ต้องเหลือชุดที่ใช้งานได้อย่างน้อย 1 ชุด');
+      const now = new Date();
+      const nextSet = group.activeSetId === setId ? remaining.slice().sort((a, b) => String(b.serviceDate || b.end || b.start).localeCompare(String(a.serviceDate || a.end || a.start)))[0] : null;
+      const filter = { _id: group._id, weeklySets: { $elemMatch: { id: setId, deletedAt: { $exists: false } } }, ...(nextSet ? { activeSetId: setId } : {}) };
+      const update = { $set: { 'weeklySets.$.deletedAt': now, 'weeklySets.$.expiresAt': new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000), 'weeklySets.$.deletedBy': user._id, updatedAt: now, ...(nextSet ? { activeSetId: nextSet.id, songIds: nextSet.songIds || [] } : {}) } };
+      const result = await database.collection('groups').updateOne(filter, update);
+      if (!result.modifiedCount) throw new HttpError(409, 'ชุดนี้เปลี่ยนจากอุปกรณ์อื่นแล้ว กรุณาโหลดใหม่');
+      const updatedGroup = { ...group, weeklySets: group.weeklySets.map((item) => item.id === setId ? { ...item, deletedAt: now, expiresAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000), deletedBy: user._id.toString() } : item), ...(nextSet ? { activeSetId: nextSet.id, songIds: nextSet.songIds || [] } : {}), updatedAt: now };
+      notifyGroup(updatedGroup, { type: 'group.changed', groupId: group._id.toString(), change: 'set_trashed', setId });
+      return json(res, 200, { group: publicGroup(updatedGroup) });
+    }
+    if (pathParts[3] === 'sets' && pathParts.length === 6 && pathParts[5] === 'restore' && method === 'PATCH') {
+      requireEditor(member);
+      const setId = pathParts[4];
+      const set = group.weeklySets?.find((item) => item.id === setId && item.deletedAt);
+      if (!set) throw new HttpError(404, 'ไม่พบชุดนี้ในถังขยะ');
+      const now = new Date();
+      const result = await database.collection('groups').updateOne({ _id: group._id, weeklySets: { $elemMatch: { id: setId, deletedAt: { $exists: true } } } }, { $unset: { 'weeklySets.$.deletedAt': '', 'weeklySets.$.deletedBy': '', 'weeklySets.$.expiresAt': '' }, $set: { updatedAt: now } });
+      if (!result.modifiedCount) throw new HttpError(409, 'ชุดนี้เปลี่ยนจากอุปกรณ์อื่นแล้ว กรุณาโหลดใหม่');
+      const updatedGroup = { ...group, weeklySets: group.weeklySets.map((item) => {
+        if (item.id !== setId) return item;
+        const { deletedAt, deletedBy, expiresAt, ...rest } = item;
+        return rest;
+      }), updatedAt: now };
+      notifyGroup(updatedGroup, { type: 'group.changed', groupId: group._id.toString(), change: 'set_restored', setId });
+      return json(res, 200, { group: publicGroup(updatedGroup) });
+    }
     if (pathParts[3] === 'sets' && pathParts.length === 5 && method === 'PATCH') {
       requireEditor(member);
       const setId = pathParts[4];
@@ -737,9 +839,12 @@ async function handleApi(req, res, url) {
       const body = await readJson(req);
       const serviceDate = String(body.serviceDate || '').trim();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(serviceDate) || Number.isNaN(Date.parse(`${serviceDate}T12:00:00Z`)) || new Date(`${serviceDate}T12:00:00Z`).toISOString().slice(0, 10) !== serviceDate) throw new HttpError(400, 'เลือกวันที่เล่นให้ถูกต้อง');
-      if (serviceDate < set.start || serviceDate > set.end) throw new HttpError(400, `เลือกวันที่ในสัปดาห์ ${set.start}–${set.end}`);
-      const updatedSet = { ...set, serviceDate, name: `ชุดวันที่ ${serviceDate}`, updatedAt: new Date() };
-      const result = await database.collection('groups').updateOne({ _id: group._id, 'weeklySets.id': setId }, { $set: { 'weeklySets.$.serviceDate': serviceDate, 'weeklySets.$.name': updatedSet.name, 'weeklySets.$.updatedAt': updatedSet.updatedAt, updatedAt: updatedSet.updatedAt } });
+      const range = currentWeekRange(new Date(`${serviceDate}T12:00:00Z`));
+      const defaultName = /^ชุดวันที่ \d{4}-\d{2}-\d{2}(?: · ชุด \d+)?$/.test(set.name || '');
+      const requestedName = body.name === undefined ? null : String(body.name || '').trim().slice(0, 80);
+      const updatedName = requestedName || (defaultName ? `ชุดวันที่ ${serviceDate}` : set.name);
+      const updatedSet = { ...set, ...range, serviceDate, name: updatedName, updatedAt: new Date() };
+      const result = await database.collection('groups').updateOne({ _id: group._id, weeklySets: { $elemMatch: { id: setId, deletedAt: { $exists: false } } } }, { $set: { 'weeklySets.$.start': range.start, 'weeklySets.$.end': range.end, 'weeklySets.$.serviceDate': serviceDate, 'weeklySets.$.name': updatedSet.name, 'weeklySets.$.updatedAt': updatedSet.updatedAt, updatedAt: updatedSet.updatedAt } });
       if (!result.matchedCount) throw new HttpError(404, 'ไม่พบชุดเพลงนี้');
       const updatedGroup = { ...group, weeklySets: group.weeklySets.map((item) => item.id === setId ? updatedSet : item) };
       notifyGroup(updatedGroup, { type: 'group.changed', groupId: group._id.toString(), change: 'set_date_changed', setId });
@@ -754,8 +859,7 @@ async function handleApi(req, res, url) {
       const sets = group.weeklySets || [];
       const requestedDate = new Date(`${serviceDate}T12:00:00Z`);
       if (requestedDate.toISOString().slice(0, 10) !== serviceDate) throw new HttpError(400, 'วันที่เล่นไม่ถูกต้อง');
-      if (sets.some((set) => set.start === range.start)) throw new HttpError(409, 'มีชุดเพลงในสัปดาห์นี้แล้ว กรุณาเลือกชุดเดิม');
-      const source = sets.find((set) => set.id === body.copyFrom) || sets.find((set) => set.id === group.activeSetId);
+      const source = sets.find((set) => set.id === body.copyFrom && !set.deletedAt) || sets.find((set) => set.id === group.activeSetId && !set.deletedAt);
       let songSnapshots = {};
       if (body.copyPrevious && source) {
         songSnapshots = structuredClone(source.songSnapshots || {});
@@ -764,7 +868,10 @@ async function handleApi(req, res, url) {
           songSnapshots = Object.fromEntries(sourceSongs.map((song) => [song._id.toString(), publicSong(song)]));
         }
       }
-      const newSet = { id: randomBytes(8).toString('hex'), ...range, serviceDate, name: `ชุดวันที่ ${serviceDate}`, songIds: body.copyPrevious && source ? [...source.songIds] : [], songSnapshots, createdAt: new Date(), updatedAt: new Date() };
+      const sameDateCount = sets.filter((set) => !set.deletedAt && set.serviceDate === serviceDate).length;
+      const requestedName = String(body.name || '').trim().slice(0, 80);
+      const generatedName = sameDateCount ? `ชุดวันที่ ${serviceDate} · ชุด ${sameDateCount + 1}` : `ชุดวันที่ ${serviceDate}`;
+      const newSet = { id: randomBytes(8).toString('hex'), ...range, serviceDate, name: requestedName || generatedName, songIds: body.copyPrevious && source ? [...source.songIds] : [], songSnapshots, createdAt: new Date(), updatedAt: new Date() };
       await database.collection('groups').updateOne({ _id: group._id }, { $push: { weeklySets: newSet }, $set: { activeSetId: newSet.id, songIds: newSet.songIds, updatedAt: new Date() } });
       const updated = { ...group, weeklySets: [...sets, newSet], activeSetId: newSet.id, songIds: newSet.songIds };
       notifyGroup(updated, { type: 'group.changed', groupId: group._id.toString(), change: 'setlist' });
@@ -804,7 +911,7 @@ async function handleApi(req, res, url) {
       if (owned !== uniqueIds.length) throw new HttpError(400, 'Setlist contains a song outside this group.');
       const setId = String(body.setId || group.activeSetId || 'legacy');
       const sets = group.weeklySets?.length ? group.weeklySets : [{ id: 'legacy', ...currentWeekRange(), name: 'ชุดปัจจุบัน', songIds: group.songIds || [] }];
-      const selected = sets.find((set) => set.id === setId);
+      const selected = sets.find((set) => set.id === setId && !set.deletedAt);
       if (!selected) throw new HttpError(404, 'ไม่พบชุดเพลงสัปดาห์นี้');
       const existingSnapshots = selected.songSnapshots || {};
       const newIds = uniqueIds.filter((id) => !existingSnapshots[id.toString()]);
@@ -836,6 +943,62 @@ async function handleApi(req, res, url) {
       notifyGroup(updated, { type: 'group.changed', groupId: group._id.toString(), change: 'member_role' });
       return json(res, 200, { group: publicGroup(updated) });
     }
+    if (pathParts[3] === 'songs' && pathParts.length === 4 && method === 'DELETE') {
+      requireEditor(member);
+      const body = await readJson(req);
+      if (!Array.isArray(body.songIds) || body.songIds.length > 500) throw new HttpError(400, 'Invalid song selection.');
+      const uniqueIds = [...new Set(body.songIds.map(String))];
+      if (uniqueIds.some((id) => !ObjectId.isValid(id))) throw new HttpError(400, 'Invalid song id.');
+      const ids = uniqueIds.map((id) => new ObjectId(id));
+      const selected = ids.length ? await database.collection('groupSongs').find({ groupId: group._id, _id: { $in: ids } }).toArray() : [];
+      if (selected.length !== ids.length) throw new HttpError(400, 'Selection contains a song outside this group.');
+      if (ids.length) {
+        await database.collection('groupSongs').deleteMany({ groupId: group._id, _id: { $in: ids } });
+        await database.collection('groups').updateOne({ _id: group._id }, { $pull: { librarySongIds: { $in: ids }, songIds: { $in: ids } }, $set: { updatedAt: new Date() } });
+        notifyGroup(group, { type: 'group.changed', groupId: group._id.toString(), change: 'songs_removed', songIds: uniqueIds });
+      }
+      return json(res, 200, { ok: true, deleted: ids.length });
+    }
+    if (pathParts[3] === 'import' && pathParts.length === 4 && method === 'POST') {
+      requireEditor(member);
+      const body = await readJson(req);
+      if (!Array.isArray(body.songs) || body.songs.length > 500) throw new HttpError(400, 'ไฟล์ต้องมีเพลงไม่เกิน 500 รายการ');
+      const collection = database.collection('groupSongs');
+      const existingSongs = await collection.find({ groupId: group._id }).toArray();
+      const canonicalByKey = new Map(existingSongs.map((song) => [duplicateSongKey(song.title, song.artist), song]));
+      const importedIds = [];
+      let duplicatesSkipped = 0;
+      let invalidSkipped = 0;
+      let imported = 0;
+      for (const source of body.songs) {
+        const fields = safeSongInput(source);
+        if (!fields.title) { invalidSkipped += 1; continue; }
+        const duplicateKey = duplicateSongKey(fields.title, fields.artist);
+        const existing = canonicalByKey.get(duplicateKey);
+        if (existing) {
+          duplicatesSkipped += 1;
+          importedIds.push(existing._id);
+          continue;
+        }
+        const song = { ...fields, displayKey: fields.key, duplicateKey, groupId: group._id, revision: 1, updatedBy: user._id, updatedAt: new Date() };
+        try {
+          await collection.insertOne(song);
+          canonicalByKey.set(duplicateKey, song);
+          importedIds.push(song._id);
+          imported += 1;
+        } catch (error) {
+          if (error.code !== 11000) throw error;
+          const raced = await collection.findOne({ groupId: group._id, duplicateKey });
+          if (!raced) throw error;
+          canonicalByKey.set(duplicateKey, raced);
+          importedIds.push(raced._id);
+          duplicatesSkipped += 1;
+        }
+      }
+      if (importedIds.length) await database.collection('groups').updateOne({ _id: group._id }, { $addToSet: { librarySongIds: { $each: importedIds } }, $set: { updatedAt: new Date() } });
+      notifyGroup(group, { type: 'group.changed', groupId: group._id.toString(), change: 'songs_imported', imported });
+      return json(res, 200, { imported, duplicatesSkipped, invalidSkipped });
+    }
     if (pathParts[3] === 'songs' && method === 'POST') {
       requireEditor(member);
       const body = await readJson(req);
@@ -860,7 +1023,7 @@ async function handleApi(req, res, url) {
       requireEditor(member);
       const setId = pathParts[4];
       const selectedSet = group.weeklySets?.find((item) => item.id === setId);
-      if (!selectedSet) throw new HttpError(404, 'ไม่พบชุดเพลงนี้');
+      if (!selectedSet || selectedSet.deletedAt) throw new HttpError(404, 'ไม่พบชุดเพลงนี้');
       const body = await readJson(req);
       const fields = safeSongInput(body.song);
       if (!fields.title) throw new HttpError(400, 'Song title is required.');
@@ -907,7 +1070,7 @@ async function handleApi(req, res, url) {
       if (!ObjectId.isValid(pathParts[6])) throw new HttpError(400, 'Invalid song id.');
       const songId = new ObjectId(pathParts[6]);
       const selectedSet = group.weeklySets?.find((item) => item.id === setId);
-      if (!selectedSet || !(selectedSet.songIds || []).some((id) => id.toString() === songId.toString())) throw new HttpError(404, 'Song not found in this set.');
+      if (!selectedSet || selectedSet.deletedAt || !(selectedSet.songIds || []).some((id) => id.toString() === songId.toString())) throw new HttpError(404, 'Song not found in this set.');
       const snapshotKey = songId.toString();
       const currentSnapshot = selectedSet.songSnapshots?.[snapshotKey];
       if (!currentSnapshot) throw new HttpError(409, 'This set song has not been loaded yet. Reload the set and try again.');
@@ -1088,6 +1251,9 @@ if (process.env.MONGODB_URI) {
     }
     if (usersMissingId.length) console.log(`Assigned public IDs to ${usersMissingId.length} existing account(s).`);
     console.log(`Connected to MongoDB database "${database.databaseName}".`);
+    purgeExpiredGroupTrash().catch((error) => console.error('Could not purge expired group sets.', error.message));
+    const trashCleanupTimer = setInterval(() => purgeExpiredGroupTrash().catch((error) => console.error('Could not purge expired group sets.', error.message)), 6 * 60 * 60 * 1000);
+    trashCleanupTimer.unref();
   } catch (error) {
     console.error('Could not connect to MongoDB. Personal cloud libraries and group features are offline.', error.message);
   }
