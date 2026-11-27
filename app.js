@@ -785,25 +785,46 @@ function confirmAction({ title, message, confirmLabel = 'ยืนยัน', da
   });
 }
 
+let activeApiRequests = 0;
+let requestLoadingTimer = 0;
+
+function setRequestLoading(active, options = {}) {
+  activeApiRequests = Math.max(0, activeApiRequests + (active ? 1 : -1));
+  const indicator = $('requestLoading');
+  if (!indicator) return;
+  clearTimeout(requestLoadingTimer);
+  if (activeApiRequests > 0) {
+    $('requestLoadingText').textContent = options.mutating ? 'กำลังบันทึกข้อมูล…' : 'กำลังโหลดข้อมูล…';
+    requestLoadingTimer = setTimeout(() => { indicator.hidden = activeApiRequests === 0; }, 160);
+  } else {
+    indicator.hidden = true;
+  }
+}
+
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-  let response;
-  try { response = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: 'include' }); }
-  catch (error) {
-    if (authUser) await enterOfflineMode('อินเทอร์เน็ตหรือเซิร์ฟเวอร์ขาดการเชื่อมต่อ');
-    throw error;
+  setRequestLoading(true, { mutating: !['GET', 'HEAD'].includes(String(options.method || 'GET').toUpperCase()) });
+  try {
+    let response;
+    try { response = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: 'include' }); }
+    catch (error) {
+      if (authUser) await enterOfflineMode('อินเทอร์เน็ตหรือเซิร์ฟเวอร์ขาดการเชื่อมต่อ');
+      throw error;
+    }
+    let result = {};
+    try { result = await response.json(); } catch { /* Surface a readable status below. */ }
+    if (!response.ok) {
+      const error = new Error(result.error || `Request failed (${response.status}).`);
+      error.status = response.status;
+      error.payload = result;
+      if (isTransientApiError(error) && authUser) await enterOfflineMode('ฐานข้อมูล/เซิร์ฟเวอร์ไม่พร้อมใช้งาน');
+      throw error;
+    }
+    return result;
+  } finally {
+    setRequestLoading(false);
   }
-  let result = {};
-  try { result = await response.json(); } catch { /* Surface a readable status below. */ }
-  if (!response.ok) {
-    const error = new Error(result.error || `Request failed (${response.status}).`);
-    error.status = response.status;
-    error.payload = result;
-    if (isTransientApiError(error) && authUser) await enterOfflineMode('ฐานข้อมูล/เซิร์ฟเวอร์ไม่พร้อมใช้งาน');
-    throw error;
-  }
-  return result;
 }
 
 function sendRealtime(message) {
