@@ -622,7 +622,7 @@ async function handleApi(req, res, url) {
     const invitationIds = notifications.map((item) => item.invitationId).filter(Boolean);
     const invitations = invitationIds.length ? await database.collection('invitations').find({ _id: { $in: invitationIds } }, { projection: { status: 1 } }).toArray() : [];
     const invitationStatus = new Map(invitations.map((item) => [item._id.toString(), item.status]));
-    return json(res, 200, { notifications: notifications.map((item) => ({ id: item._id.toString(), type: item.type, invitationId: item.invitationId?.toString(), invitationStatus: item.invitationId ? invitationStatus.get(item.invitationId.toString()) : undefined, suggestionId: item.suggestionId?.toString(), suggestionStatus: item.suggestionStatus, songTitle: item.songTitle, requesterName: item.requesterName, groupId: item.groupId?.toString(), groupName: item.groupName, inviterName: item.inviterName, recipientEmail: item.recipientEmail, decision: item.decision, role: item.role, readAt: item.readAt, createdAt: item.createdAt })) });
+    return json(res, 200, { notifications: notifications.map((item) => ({ id: item._id.toString(), type: item.type, invitationId: item.invitationId?.toString(), invitationStatus: item.invitationId ? invitationStatus.get(item.invitationId.toString()) : undefined, suggestionId: item.suggestionId?.toString(), suggestionStatus: item.suggestionStatus, songTitle: item.songTitle, requesterName: item.requesterName, groupId: item.groupId?.toString(), groupName: item.groupName, inviterName: item.inviterName, recipientEmail: item.recipientEmail, previousOwnerName: item.previousOwnerName, newOwnerName: item.newOwnerName, decision: item.decision, role: item.role, readAt: item.readAt, createdAt: item.createdAt })) });
   }
   if (pathParts[1] === 'notifications' && method === 'PATCH' && pathParts[2]) {
     if (!ObjectId.isValid(pathParts[2])) throw new HttpError(400, 'Invalid notification id.');
@@ -673,6 +673,59 @@ async function handleApi(req, res, url) {
   if (pathParts[1] === 'groups' && pathParts[2]) {
     const groupId = pathParts[2];
     const { group, member } = await requireGroup(groupId, user._id);
+    if (pathParts.length === 4 && pathParts[3] === 'transfer-owner' && method === 'POST') {
+      if (member.role !== 'owner' || !group.ownerId.equals(user._id)) throw new HttpError(403, 'Only the current group owner can transfer ownership.');
+      const body = await readJson(req);
+      if (!ObjectId.isValid(body.newOwnerId)) throw new HttpError(400, 'Choose a valid group member.');
+      const newOwnerId = new ObjectId(body.newOwnerId);
+      if (newOwnerId.equals(user._id)) throw new HttpError(400, 'The current owner already owns this group.');
+      const newOwner = (group.members || []).find((item) => item.userId.equals(newOwnerId));
+      if (!newOwner) throw new HttpError(404, 'The selected account is not a member of this group.');
+      const previousOwnerName = member.displayName || member.email || 'เจ้าของเดิม';
+      const newOwnerName = newOwner.displayName || newOwner.email || 'เจ้าของใหม่';
+      const now = new Date();
+      const result = await database.collection('groups').updateOne({
+        _id: group._id,
+        ownerId: user._id,
+        members: { $all: [
+          { $elemMatch: { userId: user._id, role: 'owner' } },
+          { $elemMatch: { userId: newOwnerId } }
+        ] }
+      }, {
+        $set: {
+          ownerId: newOwnerId,
+          'members.$[former].role': 'editor',
+          'members.$[incoming].role': 'owner',
+          updatedAt: now
+        }
+      }, { arrayFilters: [{ 'former.userId': user._id }, { 'incoming.userId': newOwnerId }] });
+      if (!result.modifiedCount) throw new HttpError(409, 'Group ownership changed. Reload the group and try again.');
+      const updatedGroup = {
+        ...group,
+        ownerId: newOwnerId,
+        updatedAt: now,
+        members: group.members.map((item) => item.userId.equals(user._id)
+          ? { ...item, role: 'editor' }
+          : item.userId.equals(newOwnerId) ? { ...item, role: 'owner' } : item)
+      };
+      const notifications = group.members.map((item) => ({
+        userId: item.userId,
+        type: 'group_owner_transferred',
+        groupId: group._id,
+        groupName: group.name,
+        previousOwnerName,
+        newOwnerName,
+        readAt: null,
+        createdAt: now
+      }));
+      if (notifications.length) await database.collection('notifications').insertMany(notifications);
+      notifyGroup(updatedGroup, { type: 'group.changed', groupId: group._id.toString(), change: 'owner_transferred' });
+      for (const item of group.members) {
+        notifyUser(item.userId, { type: 'groups.changed' });
+        notifyUser(item.userId, { type: 'notification.created', notificationType: 'group_owner_transferred', groupId: group._id.toString() });
+      }
+      return json(res, 200, { group: publicGroup(updatedGroup) });
+    }
     if (pathParts.length === 3 && method === 'PATCH') {
       if (member.role !== 'owner') throw new HttpError(403, 'Only the group owner can rename this group.');
       const body = await readJson(req);

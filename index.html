@@ -20,7 +20,6 @@
         <div class="top-actions">
           <button class="icon-button notification-button" id="inboxButton" title="กล่องแจ้งเตือน" aria-label="กล่องแจ้งเตือน" hidden><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><span id="inboxBadge" class="notification-badge" hidden></span></button>
           <button class="quiet-button account-button" id="accountButton"><svg class="ui-icon account-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.2"/><path d="M5.5 20c.5-3.3 2.8-5.2 6.5-5.2s6 1.9 6.5 5.2"/></svg><span id="accountButtonLabel">เข้าสู่ระบบ</span></button>
-          <button class="primary-button" id="newSongButton">＋ <span>เพิ่มเพลง</span></button>
         </div>
       </header>
 
@@ -53,13 +52,19 @@
           <section id="todaySetlistPanel" class="today-panel" aria-labelledby="todayHeading">
             <div class="today-heading">
               <div><p class="eyebrow">SETLIST</p><h2 id="todayHeading">เพลงวันนี้</h2></div>
-              <span id="todaySongCount" class="today-count">0 เพลง</span>
+              <div class="today-heading-actions"><span id="todaySongCount" class="today-count">0 เพลง</span><button type="button" id="todayAddSongButton" class="quiet-button">＋ เพิ่มเพลงวันนี้</button></div>
             </div>
             <div id="todayBulkToolbar" class="bulk-toolbar" data-bulk-context="today" hidden></div>
             <div id="todaySongList" class="today-song-list drop-target" aria-live="polite" aria-label="ลำดับเพลงวันนี้"></div>
             <div id="todaySongsPager" class="song-pagination"></div>
             <p id="todaySetlistEmpty" class="today-empty">กด “+ วันนี้” ที่เพลง หรือ ลากเพลงจากคลังมาวางที่นี่</p>
           </section>
+          <dialog id="todaySongPickerDialog" class="app-dialog">
+            <div class="dialog-heading"><div><h2>เพิ่มเพลงวันนี้</h2><p class="hint">เลือกเพลงจากคลังส่วนตัวเพื่อเพิ่มลงรายการวันนี้</p></div><button type="button" class="icon-button" data-close-dialog="todaySongPickerDialog" aria-label="ปิด">×</button></div>
+            <label class="search-box"><span aria-hidden="true">⌕</span><input id="todaySongPickerSearch" type="search" placeholder="ค้นเพลงส่วนตัว" /></label>
+            <p id="todaySongPickerEmpty" class="group-empty" hidden></p>
+            <div id="todaySongPickerList" class="group-song-list"></div>
+          </dialog>
           <section id="groupPanel" class="group-panel" hidden aria-labelledby="groupHeading">
             <div class="group-heading">
               <div><p class="eyebrow">SHARED WORSHIP SET</p><h2 id="groupHeading">กลุ่มเพลง</h2></div>
@@ -84,7 +89,7 @@
             <p id="groupEmptyState" class="group-empty">สร้างกลุ่มเพื่อแชร์เพลงและลำดับเพลงกับทีมแบบเรียลไทม์</p>
             <p id="groupDropHint" class="group-drop-hint" hidden>ลากเพลงจากคลังส่วนตัวมาวาง เพื่อเพิ่มเพลงเข้าคลังกลุ่ม</p>
             <div id="groupMembers" class="group-members"></div>
-            <div class="weekly-songs-heading"><div><h3 id="weeklySetHeading" class="group-list-heading">เพลงในชุดสัปดาห์นี้</h3><button id="editWeeklyServiceDateButton" class="text-button" type="button" hidden>แก้วัน / ชื่อชุด</button><button id="trashWeeklySetButton" class="text-button danger-text-button" type="button" hidden>ย้ายชุดนี้ไปถังขยะ</button></div><button id="addGroupSongButton" class="primary-button" type="button" hidden>＋ เพิ่มเพลง</button></div>
+            <div class="weekly-songs-heading"><div><h3 id="weeklySetHeading" class="group-list-heading">เพลงในชุดสัปดาห์นี้</h3><button id="editWeeklyServiceDateButton" class="text-button" type="button" hidden>แก้วัน / ชื่อชุด</button><button id="trashWeeklySetButton" class="text-button danger-text-button" type="button" hidden>ย้ายชุดนี้ไปถังขยะ</button></div><button id="addGroupSongButton" class="primary-button" type="button" hidden>＋ เพิ่มเพลงในชุด</button></div>
             <div id="groupSetBulkToolbar" class="bulk-toolbar" data-bulk-context="groupSet" hidden></div>
             <div id="groupSongList" class="group-song-list" aria-live="polite"></div>
             <div id="groupSongsPager" class="song-pagination"></div>
@@ -104,8 +109,8 @@
             <dialog id="groupSongPickerDialog" class="app-dialog">
               <div class="dialog-heading"><div><h2 id="groupSongPickerTitle">เพิ่มเพลงในชุดนี้</h2><p id="groupSongPickerWeek" class="hint"></p></div><button type="button" class="icon-button" data-close-dialog="groupSongPickerDialog" aria-label="ปิด">×</button></div>
               <div class="song-picker-sources" role="tablist" aria-label="เลือกคลังเพลง">
-                <button type="button" role="tab" aria-selected="true" data-picker-source="group">คลังเพลงกลุ่ม</button>
-                <button type="button" role="tab" aria-selected="false" data-picker-source="personal">เพลงของฉัน</button>
+                <button type="button" role="tab" aria-selected="true" data-picker-source="group">คลังกลุ่ม</button>
+                <button type="button" role="tab" aria-selected="false" data-picker-source="personal">คลังส่วนตัว</button>
               </div>
               <p id="groupSongPickerHelp" class="hint">เลือกเพลงที่แชร์ไว้ในคลังกลุ่ม เพื่อเพิ่มลงชุดนี้</p>
               <label class="search-box"><span aria-hidden="true">⌕</span><input id="groupSongPickerSearch" type="search" placeholder="ค้นเพลงในคลังกลุ่ม" /></label>
@@ -113,7 +118,7 @@
             </dialog>
           </section>
           <section id="personalLibraryDropZone" class="personal-library-drop-zone" aria-label="เพลงของฉัน">
-            <div class="personal-library-heading"><div><h2>คลังส่วนตัว <span id="personalSongCount" class="library-song-count">0 เพลงทั้งหมด</span></h2><p>เห็นได้เฉพาะคุณ</p></div></div>
+            <div class="personal-library-heading"><div><h2>คลังส่วนตัว <span id="personalSongCount" class="library-song-count">0 เพลงทั้งหมด</span></h2><p>เห็นได้เฉพาะคุณ</p></div><button class="primary-button" id="newSongButton" type="button">＋ <span>เพิ่มเพลงส่วนตัว</span></button></div>
             <p id="libraryDropHint" class="library-drop-hint" hidden>ลากเพลงจากกลุ่มมาวางที่รายการนี้เพื่อคัดลอกเข้าเพลงของฉัน · ต้นฉบับในกลุ่มจะไม่เปลี่ยน</p>
             <div id="personalBulkToolbar" class="bulk-toolbar" data-bulk-context="personal" hidden></div>
             <div id="songList" class="song-list" aria-live="polite"></div>
@@ -269,6 +274,12 @@
           <p id="groupSettingsError" class="dialog-error" hidden></p>
           <button id="saveGroupNameButton" class="primary-button" type="submit">บันทึกชื่อ</button>
         </form>
+        <section id="groupOwnerTransfer" class="group-owner-transfer" hidden>
+          <h3>โอนสิทธิ์เจ้าของกลุ่ม</h3>
+          <p>สมาชิกที่รับโอนจะเป็นเจ้าของกลุ่ม ส่วนคุณจะเปลี่ยนเป็นผู้แก้ไข</p>
+          <label class="field-label" for="groupOwnerTarget">เลือกเจ้าของใหม่<select id="groupOwnerTarget"></select></label>
+          <button id="transferGroupOwnerButton" type="button" class="primary-button owner-transfer-button"><span aria-hidden="true">⇄</span> โอนสิทธิ์เจ้าของ</button>
+        </section>
         <div class="group-danger-zone"><strong>ลบกลุ่ม</strong><p>ลบกลุ่มและเพลงที่แชร์ไว้ สมาชิกจะไม่เห็นกลุ่มนี้อีก การลบย้อนกลับไม่ได้</p><button id="deleteGroupButton" class="danger-button" type="button">ลบกลุ่มนี้</button></div>
       </dialog>
       <dialog id="confirmDialog" class="app-dialog confirm-dialog">
