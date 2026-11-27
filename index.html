@@ -40,19 +40,25 @@
           </div>
           <div id="connectivityBanner" class="connectivity-banner" role="status" aria-live="polite" hidden><span id="connectivityText"></span><button id="syncNowButton" type="button" class="quiet-button" hidden>ลองเชื่อมต่อ</button></div>
           <div class="library-tools">
-            <label class="search-box"><span aria-hidden="true">⌕</span><input id="searchInput" type="search" placeholder="ค้นหาชื่อเพลง ศิลปิน เนื้อร้อง หรือคอร์ด" aria-describedby="searchHelp" /></label>
+            <div class="search-box"><span aria-hidden="true">⌕</span><input id="searchInput" type="search" placeholder="ค้นชื่อเพลง ศิลปิน เนื้อร้อง หรือคอร์ด" aria-describedby="searchHelp" /><button id="clearSearchButton" type="button" class="search-clear-button" aria-label="ล้างคำค้น" title="ล้างคำค้น" hidden>×</button></div>
           </div>
-          <p id="searchHelp" class="search-help">ค้นหาได้จากชื่อเพลง ศิลปิน เนื้อร้อง หรือคอร์ด</p>
-          <nav class="main-view-tabs" role="tablist" aria-label="ส่วนของสมุดเพลง">
+          <p id="searchHelp" class="search-help">ค้นในเพลงวันนี้ เพลงของฉัน และกลุ่มที่คุณเข้าถึงได้</p>
+          <div id="searchScopeFilters" class="search-scope-filters" role="group" aria-label="กรองผลการค้นหา" hidden>
+            <button type="button" data-search-scope="all" aria-pressed="true">ทั้งหมด</button>
+            <button type="button" data-search-scope="today" aria-pressed="false">เพลงวันนี้</button>
+            <button type="button" data-search-scope="personal" aria-pressed="false">เพลงของฉัน</button>
+            <button type="button" data-search-scope="group" aria-pressed="false">เพลงกลุ่ม</button>
+          </div>
+          <div id="searchResults" class="search-results" aria-live="polite" aria-busy="false" hidden></div>
+          <nav id="mainViewTabs" class="main-view-tabs" role="tablist" aria-label="ส่วนของสมุดเพลง">
             <button type="button" role="tab" id="tabToday" aria-controls="todaySetlistPanel" aria-selected="true" data-main-tab="today"><strong>เพลงวันนี้</strong><small>เห็นได้เฉพาะคุณ</small></button>
             <button type="button" role="tab" id="tabGroup" aria-controls="groupPanel" aria-selected="false" data-main-tab="group"><strong>ชุดเพลงกลุ่ม</strong><small>เห็นร่วมกันในกลุ่มที่เลือก</small></button>
             <button type="button" role="tab" id="tabPersonal" aria-controls="personalLibraryDropZone" aria-selected="false" data-main-tab="personal"><strong>คลังส่วนตัว</strong><small>เห็นได้เฉพาะคุณ</small></button>
           </nav>
-          <div id="searchResults" class="search-results" aria-live="polite" hidden></div>
           <section id="todaySetlistPanel" class="today-panel" aria-labelledby="todayHeading">
             <div class="today-heading">
               <div><p class="eyebrow">SETLIST</p><h2 id="todayHeading">เพลงวันนี้</h2></div>
-              <div class="today-heading-actions"><span id="todaySongCount" class="today-count">0 เพลง</span><button type="button" id="todayAddSongButton" class="quiet-button">＋ เพิ่มเพลงวันนี้</button></div>
+              <div class="today-heading-actions"><span id="todaySongCount" class="today-count">0 เพลง</span><button type="button" id="todayStartPlaybackButton" class="primary-button" disabled><span aria-hidden="true">▶</span> เริ่มเล่น</button><button type="button" id="todayAddSongButton" class="primary-button">＋ เพิ่มเพลงวันนี้</button></div>
             </div>
             <div id="todayBulkToolbar" class="bulk-toolbar" data-bulk-context="today" hidden></div>
             <div id="todaySongList" class="today-song-list drop-target" aria-live="polite" aria-label="ลำดับเพลงวันนี้"></div>

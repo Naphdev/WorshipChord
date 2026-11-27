@@ -11,6 +11,46 @@ const SHARP_SPELLING_KEYS = new Set(['C#', 'D#', 'F#', 'G#', 'A#']);
 const NATURAL = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
 
 const $ = (id) => document.getElementById(id);
+let pageScrollLockActive = false;
+let pageScrollPosition = 0;
+
+function lockPageScroll() {
+  if (pageScrollLockActive) return;
+  pageScrollPosition = window.scrollY || document.documentElement.scrollTop || 0;
+  const scrollbarWidth = Math.max(0, window.innerWidth - document.documentElement.clientWidth);
+  document.body.style.setProperty('--dialog-scroll-top', `-${pageScrollPosition}px`);
+  document.body.style.setProperty('--dialog-scrollbar-compensation', `${scrollbarWidth}px`);
+  document.body.classList.add('dialog-scroll-locked');
+  pageScrollLockActive = true;
+}
+
+function unlockPageScroll() {
+  if (!pageScrollLockActive) return;
+  document.body.classList.remove('dialog-scroll-locked');
+  document.body.style.removeProperty('--dialog-scroll-top');
+  document.body.style.removeProperty('--dialog-scrollbar-compensation');
+  pageScrollLockActive = false;
+  window.scrollTo(0, pageScrollPosition);
+}
+
+function syncPageScrollLock() {
+  if (document.querySelector('dialog[open]')) lockPageScroll();
+  else unlockPageScroll();
+}
+
+function openAppDialog(dialog) {
+  if (!dialog || dialog.open) return;
+  lockPageScroll();
+  dialog.showModal();
+}
+
+function observeDialogScrollState() {
+  const observer = new MutationObserver(syncPageScrollLock);
+  observer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['open'] });
+  document.querySelectorAll('dialog').forEach((dialog) => dialog.addEventListener('close', syncPageScrollLock));
+  syncPageScrollLock();
+}
+
 let db;
 let songs = [];
 let todaySetlist = { id: TODAY_SETLIST_ID, name: 'เพลงวันนี้', songIds: [] };
@@ -36,9 +76,14 @@ let pendingSyncConflict = null;
 let groups = [];
 let activeGroup = null;
 let sharedSongs = [];
+let sharedSongsGroupId = null;
 let activeSetSongs = [];
 let activeWeeklySet = null;
 let activeMainTab = 'today';
+let searchScope = 'all';
+let searchRequestToken = 0;
+const searchGroupLibraries = new Map();
+const pendingSearchGroupLoads = new Map();
 let groupSongPickerSource = 'group';
 let groupSuggestions = [];
 let editorSourceKeyConfirmed = false;
@@ -198,7 +243,7 @@ async function enterOfflineMode(message = 'ฐานข้อมูล/อิน
   offlineMode = true;
   realtimeSocket?.close();
   realtimeSocket = null;
-  groups = snapshot ? [snapshot.group] : []; activeGroup = snapshot?.group || null; sharedSongs = snapshot?.songs || []; activeWeeklySet = snapshot?.activeSet || null; activeSetSongs = snapshot?.setSongs || [];
+  groups = snapshot ? [snapshot.group] : []; activeGroup = snapshot?.group || null; sharedSongs = snapshot?.songs || []; sharedSongsGroupId = snapshot?.id || null; activeWeeklySet = snapshot?.activeSet || null; activeSetSongs = snapshot?.setSongs || [];
   offlineGroupSnapshot = Boolean(snapshot);
   if (editingGroupId && !$('editorView').hidden) {
     editingGroupId = null;
@@ -381,7 +426,7 @@ function showSyncConflict(item) {
     $('syncConflictSummary').textContent = `เพลงในคลาวด์ ${cloud?.songs?.length || 0} เพลง · ตรวจรายการเพลงก่อนเลือกลำดับที่จะเก็บ`;
   }
   $('syncConflictBoth').hidden = !isSong || item.operation === 'delete' || !item.conflictCloudSong;
-  dialog.showModal();
+  openAppDialog(dialog);
 }
 
 async function syncPendingChanges() {
@@ -571,6 +616,10 @@ async function applyConflictChoice(choice) {
 }
 
 async function loadPrivateLibrary(user, allowLegacyPrompt = true) {
+  if (authUser?.id !== user.id) {
+    searchGroupLibraries.clear();
+    pendingSearchGroupLoads.clear();
+  }
   const accountDbName = `${DB_NAME}-${user.id}`;
   if (db?.name !== accountDbName) {
     db?.close();
@@ -785,7 +834,7 @@ function confirmAction({ title, message, confirmLabel = 'ยืนยัน', da
     $('confirmCancelButton').onclick = () => finish(false);
     dialog.addEventListener('close', () => resolve(dialog.returnValue === 'confirm'), { once: true });
     dialog.addEventListener('cancel', () => resolve(false), { once: true });
-    dialog.showModal();
+    openAppDialog(dialog);
   });
 }
 
@@ -1153,6 +1202,7 @@ function renderGroupPanel() {
   renderGroupLibrary();
   renderGroupSuggestions();
   renderAllBulkToolbars();
+  syncSearchVisibility();
 }
 
 function renderGroupMembers() {
@@ -1311,6 +1361,7 @@ async function loadGroups(preferredId = activeGroup?.id) {
   const previousGroupId = activeGroup?.id;
   const result = await api('/api/groups');
   groups = result.groups;
+  searchGroupLibraries.clear();
   const pinnedOfflineGroup = localStorage.getItem(`${READER_PREFS_KEY}.offlineGroup`);
   if (pinnedOfflineGroup && !groups.some((group) => group.id === pinnedOfflineGroup)) {
     localStorage.removeItem(`${READER_PREFS_KEY}.offlineGroup`);
@@ -1321,7 +1372,7 @@ async function loadGroups(preferredId = activeGroup?.id) {
   if (previousGroupId && previousGroupId !== activeGroup?.id) sendRealtime({ type: 'unsubscribe', groupId: previousGroupId });
   renderGroupPanel();
   if (activeGroup) await loadActiveGroup();
-  else { sharedSongs = []; renderGroupPanel(); }
+  else { sharedSongs = []; sharedSongsGroupId = null; renderGroupPanel(); }
   renderSongRows();
 }
 
@@ -1367,6 +1418,8 @@ async function loadActiveGroup() {
   if (activeGroup?.id !== id) return;
   activeGroup = result.group;
   sharedSongs = result.librarySongs || result.songs;
+  sharedSongsGroupId = id;
+  searchGroupLibraries.set(id, { songs: sharedSongs, loadedAt: Date.now() });
   activeWeeklySet = result.activeSet;
   activeSetSongs = result.songs;
   const snapshot = { id: activeGroup.id, group: activeGroup, songs: sharedSongs, activeSet: activeWeeklySet, setSongs: activeSetSongs, savedAt: Date.now() };
@@ -1381,7 +1434,7 @@ async function prepareActiveGroupOffline() {
   try {
     const result = await api(`/api/groups/${encodeURIComponent(activeGroup.id)}?setId=${encodeURIComponent(activeWeeklySet.id)}`);
     activeGroup = result.group;
-    sharedSongs = result.librarySongs || result.songs; activeWeeklySet = result.activeSet; activeSetSongs = result.songs;
+    sharedSongs = result.librarySongs || result.songs; sharedSongsGroupId = activeGroup.id; activeWeeklySet = result.activeSet; activeSetSongs = result.songs;
     await saveGroupSnapshot({ id: activeGroup.id, group: activeGroup, songs: sharedSongs, activeSet: activeWeeklySet, setSongs: activeSetSongs, savedAt: Date.now() });
     localStorage.setItem(`${READER_PREFS_KEY}.offlineGroup`, activeGroup.id);
     localStorage.setItem(`${READER_PREFS_KEY}.offlineGroupSet`, activeWeeklySet.id);
@@ -1420,7 +1473,7 @@ function connectRealtime() {
     if (message.type === 'group.changed' && message.groupId === activeGroup?.id) {
       if (message.change === 'group_deleted') {
         if (!$('readerView').hidden && ['group', 'groupLibrary'].includes(readerContext)) showView('library');
-        activeGroup = null; sharedSongs = [];
+        activeGroup = null; sharedSongs = []; sharedSongsGroupId = null;
         try { await loadGroups(); } catch { renderGroupPanel(); }
         return;
       }
@@ -1754,6 +1807,9 @@ async function hydrateAccount() {
     groups = [];
     activeGroup = null;
     sharedSongs = [];
+    sharedSongsGroupId = null;
+    searchGroupLibraries.clear();
+    pendingSearchGroupLoads.clear();
     renderGroupPanel();
     renderSongRows();
     setConnectivityBanner('');
@@ -1809,7 +1865,7 @@ function openGroupSettings(create = false) {
   }).join('');
   $('saveGroupNameButton').textContent = create ? 'สร้างกลุ่ม' : 'บันทึกชื่อ';
   $('groupNameForm').dataset.mode = create ? 'create' : 'rename';
-  $('groupSettingsDialog').showModal();
+  openAppDialog($('groupSettingsDialog'));
   $('groupNameInput').focus();
 }
 
@@ -1869,7 +1925,7 @@ async function deleteActiveGroup() {
       localStorage.removeItem(`${READER_PREFS_KEY}.offlineGroupSet`);
     }
     $('groupSettingsDialog').close();
-    activeGroup = null; sharedSongs = []; offlineGroupSnapshot = false;
+    activeGroup = null; sharedSongs = []; sharedSongsGroupId = null; offlineGroupSnapshot = false;
     await loadGroups();
     connectRealtime();
     notify('ลบกลุ่มแล้ว');
@@ -1973,9 +2029,217 @@ async function removeSharedSong(songId) {
   } catch (error) { notify(error.message); }
 }
 
+function normalizeSearchValue(value) {
+  return String(value || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('th-TH');
+}
+
+function searchSongMatches(song, query) {
+  const needle = normalizeSearchValue(query);
+  const matches = new Set();
+  if (!needle) return matches;
+  if (normalizeSearchValue(song.title).includes(needle)) matches.add('title');
+  if (normalizeSearchValue(song.artist).includes(needle)) matches.add('artist');
+
+  const lines = String(song.text || '').split(/\r?\n/);
+  const chordRows = lines.filter((line) => {
+    const tokens = line.trim().split(/\s+/).filter(Boolean);
+    return tokens.length > 0 && !/[\u0E00-\u0E7F]/.test(line) && tokens.every((token) => /^[|,;:/]+$/.test(token) || strictChordToken(token));
+  });
+  const bracketedChords = lines.flatMap((line) => [...line.matchAll(/\[([^\]]+)\]/g)].map((match) => match[1])).filter((chord) => isChordExpression(chord));
+  const chordHit = [...bracketedChords, ...chordRows.flatMap((line) => line.trim().split(/\s+/))]
+    .some((chord) => normalizeSearchValue(chord).includes(needle) && (isChordExpression(chord) || strictChordToken(chord)));
+  if (chordHit) matches.add('chord');
+
+  const lyricText = lines.filter((line) => {
+    if (/^\s*\[[^\]]+\]\s*$/.test(line)) return false;
+    const tokens = line.trim().split(/\s+/).filter(Boolean);
+    return !(tokens.length > 0 && !/[\u0E00-\u0E7F]/.test(line) && tokens.every((token) => /^[|,;:/]+$/.test(token) || strictChordToken(token)));
+  }).map((line) => line.replace(/\[[^\]]+\]/g, ' ')).join(' ');
+  if (normalizeSearchValue(lyricText).includes(needle)) matches.add('lyrics');
+  return matches;
+}
+
+function searchSongIdentity(song) {
+  const title = normalizeSearchValue(song.title);
+  const artist = normalizeSearchValue(song.artist);
+  return title ? `${title}\u0000${artist}` : `id:${song.id}`;
+}
+
+async function loadSearchGroupLibrary(group) {
+  if (offlineMode) {
+    if (group.id === activeGroup?.id && sharedSongsGroupId === group.id) return sharedSongs;
+    const snapshot = await getGroupSnapshot(group.id).catch(() => null);
+    return snapshot?.songs || [];
+  }
+  if (group.id === activeGroup?.id && sharedSongsGroupId === group.id) {
+    searchGroupLibraries.set(group.id, { songs: sharedSongs, loadedAt: Date.now() });
+    return sharedSongs;
+  }
+  const cached = searchGroupLibraries.get(group.id);
+  if (cached && Date.now() - cached.loadedAt < 30000) return cached.songs;
+  if (pendingSearchGroupLoads.has(group.id)) return pendingSearchGroupLoads.get(group.id);
+
+  const loading = api(`/api/groups/${encodeURIComponent(group.id)}`)
+    .then((result) => {
+      const library = result.librarySongs || result.songs || [];
+      searchGroupLibraries.set(group.id, { songs: library, loadedAt: Date.now() });
+      return library;
+    })
+    .finally(() => pendingSearchGroupLoads.delete(group.id));
+  pendingSearchGroupLoads.set(group.id, loading);
+  return loading;
+}
+
+function searchSourceOrder(source) {
+  return ({ today: 0, personal: 1, group: 2 })[source.type] ?? 3;
+}
+
+function preferredSearchSource(sources) {
+  const activeGroupSource = sources.find((source) => source.type === 'group' && source.groupId === activeGroup?.id);
+  if (activeMainTab === 'group' && activeGroupSource) return activeGroupSource;
+  if (activeMainTab === 'today') {
+    const todaySource = sources.find((source) => source.type === 'today');
+    if (todaySource) return todaySource;
+  }
+  if (activeMainTab === 'personal') {
+    const personalSource = sources.find((source) => source.type === 'personal');
+    if (personalSource) return personalSource;
+  }
+  return sources.find((source) => source.type === 'personal') || sources[0];
+}
+
+function renderSearchSourceButton(source, label) {
+  const key = source.song.displayKey || source.song.key || 'C';
+  const groupId = source.groupId || '';
+  return `<button type="button" class="search-source-chip" data-open-search-song="${escapeHtml(source.song.id)}" data-search-context="${escapeHtml(source.context)}" data-search-group-id="${escapeHtml(groupId)}" aria-label="เปิดเพลง ${escapeHtml(source.song.title || 'เพลงไม่มีชื่อ')} จาก${escapeHtml(label)} คีย์ ${escapeHtml(key)}"><span>${escapeHtml(label)}</span><small>${escapeHtml(key)}</small></button>`;
+}
+
+async function renderSearchResults(query) {
+  const results = $('searchResults');
+  const token = ++searchRequestToken;
+  const needle = query.trim();
+  results.hidden = !needle;
+  results.setAttribute('aria-busy', 'false');
+  if (!needle) { results.innerHTML = ''; return; }
+  if (!authUser) {
+    results.innerHTML = '<div class="search-empty"><strong>เข้าสู่ระบบเพื่อค้นหาเพลงในคลัง</strong><button type="button" id="searchLoginButton" class="quiet-button">เข้าสู่ระบบ / สมัครสมาชิก</button></div>';
+    return;
+  }
+
+  results.setAttribute('aria-busy', 'true');
+  results.innerHTML = '<div class="search-loading"><span class="search-spinner" aria-hidden="true"></span>กำลังค้นหาในคลังเพลง…</div>';
+  const groupLoads = await Promise.allSettled(groups.map(async (group) => ({ group, songs: await loadSearchGroupLibrary(group) })));
+  if (token !== searchRequestToken || needle !== $('searchInput').value.trim()) return;
+
+  const failedGroups = groupLoads.filter((result) => result.status === 'rejected').length;
+  const sources = [];
+  for (const song of songs) {
+    const matches = searchSongMatches(song, needle);
+    if (!matches.size) continue;
+    sources.push({ song, type: 'personal', context: 'library', label: 'เพลงของฉัน', matches });
+    if ((todaySetlist.songIds || []).includes(song.id)) {
+      sources.push({ song, type: 'today', context: 'today', label: 'เพลงวันนี้', matches });
+    }
+  }
+  for (const result of groupLoads) {
+    if (result.status !== 'fulfilled') continue;
+    const { group, songs: library } = result.value;
+    for (const song of library) {
+      const matches = searchSongMatches(song, needle);
+      if (matches.size) sources.push({ song, type: 'group', context: 'groupLibrary', groupId: group.id, label: `กลุ่ม · ${group.name || 'กลุ่มเพลง'}`, matches });
+    }
+  }
+
+  const grouped = new Map();
+  for (const source of sources) {
+    const identity = searchSongIdentity(source.song);
+    if (!grouped.has(identity)) grouped.set(identity, { title: source.song.title || 'เพลงไม่มีชื่อ', artist: source.song.artist || '', sources: [], matches: new Set() });
+    const item = grouped.get(identity);
+    if (!item.sources.some((existing) => existing.type === source.type && existing.groupId === source.groupId && existing.song.id === source.song.id)) item.sources.push(source);
+    source.matches.forEach((match) => item.matches.add(match));
+  }
+
+  const scope = searchScope;
+  const resultsToRender = [...grouped.values()].map((item) => ({
+    ...item,
+    sources: item.sources.filter((source) => scope === 'all' || source.type === scope).sort((a, b) => searchSourceOrder(a) - searchSourceOrder(b)),
+  })).filter((item) => item.sources.length > 0).map((item) => ({
+    ...item,
+    matches: new Set(item.sources.flatMap((source) => [...source.matches])),
+  }));
+  const matchLabels = { title: 'ชื่อเพลง', artist: 'ศิลปิน/ผู้แต่ง', lyrics: 'เนื้อเพลง', chord: 'คอร์ด' };
+  const rank = (item) => Math.min(...[...item.matches].map((match) => ({ title: 0, artist: 1, chord: 2, lyrics: 3 })[match] ?? 4));
+  resultsToRender.sort((a, b) => rank(a) - rank(b) || a.title.localeCompare(b.title, 'th'));
+
+  const cards = resultsToRender.map((item) => {
+    const preferred = preferredSearchSource(item.sources);
+    const artist = item.artist || 'ยังไม่ระบุศิลปิน';
+    const foundIn = [...item.matches].map((match) => matchLabels[match]).filter(Boolean).join(' · ');
+    const mainAction = `<button type="button" class="search-result-main" data-open-search-song="${escapeHtml(preferred.song.id)}" data-search-context="${escapeHtml(preferred.context)}" data-search-group-id="${escapeHtml(preferred.groupId || '')}"><span><strong>${escapeHtml(item.title)}</strong><span class="search-result-main-key">${escapeHtml(preferred.song.displayKey || preferred.song.key || 'C')}</span></span><small>${escapeHtml(artist)} · พบใน ${escapeHtml(foundIn)}</small></button>`;
+    const sourceActions = item.sources.map((source) => renderSearchSourceButton(source, source.label)).join('');
+    return `<article class="search-result-card">${mainAction}<div class="search-result-sources" role="group" aria-label="เลือกแหล่งเพลง">${sourceActions}</div></article>`;
+  }).join('');
+  const failureMessage = failedGroups ? `<p class="search-partial-warning" role="status">ค้นหาใน ${failedGroups} กลุ่มไม่สำเร็จ · ลองอีกครั้งเมื่อต่อเน็ต</p>` : '';
+  const emptyState = !resultsToRender.length
+    ? failedGroups
+      ? '<div class="search-empty"><strong>ค้นหาในบางกลุ่มไม่สำเร็จ</strong><span>เชื่อมต่ออินเทอร์เน็ตแล้วลองอีกครั้ง</span><button type="button" class="quiet-button" id="retrySearchButton">ลองค้นหาอีกครั้ง</button></div>'
+      : `<div class="search-empty"><strong>ไม่พบเพลงที่ตรงกับ “${escapeHtml(needle)}”</strong><span>ลองเปลี่ยนคำค้น หรือเพิ่มเพลงใหม่</span><button type="button" class="primary-button" id="searchAddSongButton">＋ เพิ่มเพลงใหม่</button></div>`
+    : '';
+  const resultCount = resultsToRender.length ? `<p class="search-result-count">พบ ${resultsToRender.length} เพลง</p>` : '';
+  results.innerHTML = `${failureMessage}${resultCount}${cards}${emptyState}`;
+  results.setAttribute('aria-busy', 'false');
+}
+
+function syncSearchVisibility() {
+  const query = $('searchInput')?.value.trim() || '';
+  const searching = Boolean(query);
+  $('searchHelp').textContent = offlineMode
+    ? 'ค้นในเพลงวันนี้ เพลงของฉัน และกลุ่มที่บันทึกไว้ในเครื่อง'
+    : 'ค้นในเพลงวันนี้ เพลงของฉัน และกลุ่มที่คุณเข้าถึงได้';
+  document.querySelectorAll('[data-search-scope]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.searchScope === searchScope)));
+  $('searchHelp').hidden = false;
+  $('searchScopeFilters').hidden = !searching || !authUser;
+  $('clearSearchButton').hidden = !searching;
+  $('mainViewTabs').hidden = searching;
+  $('todaySetlistPanel').hidden = searching || activeMainTab !== 'today';
+  $('personalLibraryDropZone').hidden = searching || activeMainTab !== 'personal';
+  $('groupPanel').hidden = searching || activeMainTab !== 'group' || (offlineMode && !offlineGroupSnapshot);
+}
+
+async function openSearchSong(button) {
+  const songId = button.dataset.openSearchSong;
+  const context = button.dataset.searchContext;
+  activeMainTab = context === 'groupLibrary' ? 'group' : context === 'today' ? 'today' : 'personal';
+  document.querySelectorAll('[data-main-tab]').forEach((tab) => tab.setAttribute('aria-selected', String(tab.dataset.mainTab === activeMainTab)));
+  if (context === 'groupLibrary') {
+    const groupId = button.dataset.searchGroupId;
+    const group = groups.find((item) => item.id === groupId);
+    if (!group) { notify('ไม่พบกลุ่มนี้ในบัญชีของคุณ'); return; }
+    if (activeGroup?.id !== groupId) {
+      if (offlineMode) { notify('ออฟไลน์เปิดได้เฉพาะกลุ่มที่บันทึกไว้ในเครื่อง'); return; }
+      activeGroup = group;
+      activeWeeklySet = group.weeklySets?.find((set) => set.id === group.activeSetId && !set.deletedAt) || null;
+      try { await loadActiveGroup(); }
+      catch (error) { notify(error.message || 'เปิดเพลงกลุ่มไม่สำเร็จ'); return; }
+    }
+    const song = sharedSongs.find((item) => item.id === songId);
+    if (!song) { notify('เพลงนี้ถูกนำออกจากคลังกลุ่มแล้ว'); return; }
+    openReader(song, 'groupLibrary');
+    return;
+  }
+
+  const song = context === 'today' ? todaySongs().find((item) => item.id === songId) : songs.find((item) => item.id === songId);
+  if (!song) { notify('ไม่พบเพลงนี้ในรายการแล้ว'); return; }
+  openReader(song, context === 'today' ? 'today' : 'library');
+}
+
 function renderSongRows() {
   $('personalSongCount').textContent = `${songs.length} เพลงทั้งหมด`;
   $('todayAddSongButton').disabled = !authUser;
+  $('todayStartPlaybackButton').disabled = !authUser || todaySongs().length === 0;
+  const query = $('searchInput').value.trim();
+  renderSearchResults(query);
+  syncSearchVisibility();
   if (!authUser) {
     $('songList').innerHTML = '';
     $('emptyState').hidden = false;
@@ -1988,33 +2252,12 @@ function renderSongRows() {
     $('todaySongList').innerHTML = '';
     return;
   }
-  const query = $('searchInput').value.trim().toLowerCase();
-  if (query) songPages.personal = 0;
-  const searchItems = [
-    ...songs.map((song) => ({ song, context: 'library' })),
-    ...(!offlineMode ? sharedSongs.map((song) => ({ song, context: activeSetSongs.some((item) => item.id === song.id) ? 'group' : 'groupLibrary' })) : []),
-  ];
-  const visibleItems = searchItems.filter(({ song }) => `${song.title} ${song.artist || ''} ${song.text || ''}`.toLocaleLowerCase('th-TH').includes(query));
-  const visible = visibleItems.filter(({ context }) => context === 'library').map(({ song }) => song);
-  const results = $('searchResults');
-  results.hidden = !query;
-  $('searchHelp').hidden = Boolean(query);
   if (query) {
-    const markup = visibleItems.map(({ song, context }) => {
-      const title = (song.title || '').toLowerCase().includes(query);
-      const artist = (song.artist || '').toLowerCase().includes(query);
-      const chordHit = String(song.text || '').split(/\r?\n/).some((line) => {
-        const bracketed = [...line.matchAll(/\[([^\]]+)\]/g)].some((match) => isChordExpression(match[1]) && match[1].toLowerCase().includes(query));
-        const row = line.trim().split(/\s+/).filter(Boolean);
-        const unbracketed = row.length > 0 && !/[\u0E00-\u0E7F]/.test(line) && row.every((token) => /^[|,;:/]+$/.test(token) || strictChordToken(token)) && row.some((token) => strictChordToken(token)?.toLowerCase().includes(query));
-        return bracketed || unbracketed;
-      });
-      const source = title ? 'ชื่อเพลง' : artist ? 'ศิลปิน/ผู้แต่ง' : chordHit ? 'คอร์ด' : 'เนื้อเพลง';
-      const contextLabel = ['group', 'groupLibrary'].includes(context) ? 'เพลงในกลุ่ม' : 'เพลงของฉัน';
-      return `<button type="button" class="search-result" data-open-search-song="${escapeHtml(song.id)}" data-search-context="${context}"><strong>${escapeHtml(song.title || 'เพลงไม่มีชื่อ')}</strong><span>${escapeHtml(song.artist || 'ไม่ระบุศิลปิน')} · ${contextLabel} · พบใน${source} · คีย์ ${escapeHtml(song.key || 'C')}</span></button>`;
-    }).join('');
-    results.innerHTML = `<p class="search-result-count">${visibleItems.length ? `พบ ${visibleItems.length} เพลง` : 'ไม่พบเพลงที่ตรงกัน'}</p>${markup || `<button type="button" class="search-add-button" id="searchAddSongButton">＋ เพิ่มเพลง “${escapeHtml($('searchInput').value.trim())}”</button>`}`;
-  } else results.innerHTML = '';
+    songPages.personal = 0;
+    syncSearchVisibility();
+    return;
+  }
+  const visible = songs;
   const shareButton = authUser && canEditActiveGroup()
     ? '<button data-action="shareGroup" title="แชร์เข้าคลังกลุ่ม · ยังไม่เพิ่มลงชุดเล่น" aria-label="แชร์เพลงเข้าคลังกลุ่ม">คลังกลุ่ม +</button>'
     : '';
@@ -2038,6 +2281,7 @@ function renderSongRows() {
   $('todaySetlistEmpty').textContent = 'กด “+ วันนี้” ที่เพลง หรือ ลากเพลงจากคลังมาวางที่นี่';
   renderTodaySongs();
   renderAllBulkToolbars();
+  syncSearchVisibility();
 }
 
 function normalizeChordSpacing(value) {
@@ -2165,6 +2409,8 @@ function todaySongs() {
 function renderTodaySongs() {
   const ordered = todaySongs();
   $('todaySongCount').textContent = `${ordered.length} เพลง`;
+  $('todayStartPlaybackButton').disabled = !authUser || ordered.length === 0;
+  $('todayStartPlaybackButton').title = ordered.length ? 'เปิดเพลงแรกและแสดงรายการเพลงวันนี้' : 'เพิ่มเพลงลงเพลงวันนี้ก่อนเริ่มเล่น';
   $('todaySetlistEmpty').hidden = ordered.length > 0;
   $('todaySongList').innerHTML = pageItems(ordered, 'today', 'todaySongsPager').map(({ song, index }) => `<article class="today-song-row" data-id="${song.id}" draggable="true" aria-grabbed="false">
     <span class="today-drag-handle" aria-hidden="true">⠿</span>
@@ -2218,7 +2464,7 @@ function openEditor(song = makeBlankSong(), groupId = null, setId = null) {
   }
   if (!groupId && !authUser) {
     updateAccountDialog();
-    $('accountDialog').showModal();
+    openAppDialog($('accountDialog'));
     notify('เข้าสู่ระบบก่อนบันทึกเพลงส่วนตัว');
     return;
   }
@@ -2781,11 +3027,12 @@ async function previewBackupImport(file) {
         ? 'เพลงที่ยังไม่มีจะถูกเพิ่มเข้าคลังส่วนตัวก่อน เพราะเพลงวันนี้ใช้เพลงจากคลังส่วนตัว · รายการซ้ำจะใช้เพลงเดิม'
         : 'เพลงใหม่จะเพิ่มในคลังส่วนตัวเท่านั้น · ไม่เปลี่ยนเพลงวันนี้ · เพลงซ้ำจะข้ามโดยเก็บฉบับเดิมไว้';
     $('confirmImportButton').disabled = importable.length === 0 && duplicateCount === 0;
-    $('importPreviewDialog').showModal();
+    openAppDialog($('importPreviewDialog'));
   } catch (error) { notify(error.message || 'อ่านไฟล์สำรองไม่สำเร็จ'); }
 }
 
 function bindEvents() {
+  observeDialogScrollState();
   bindSongPagers();
   document.addEventListener('change', (event) => {
     const input = event.target.closest('[data-bulk-select]');
@@ -2815,11 +3062,16 @@ function bindEvents() {
   }));
   $('newSongButton').addEventListener('click', () => openEditor());
   $('emptyNewSongButton').addEventListener('click', () => openEditor());
+  $('todayStartPlaybackButton').addEventListener('click', () => {
+    const firstSong = todaySongs()[0];
+    if (!firstSong) { notify('เพิ่มเพลงลงเพลงวันนี้ก่อนเริ่มเล่น'); return; }
+    openReader(firstSong, 'today');
+  });
   $('todayAddSongButton').addEventListener('click', () => {
-    if (!authUser) { updateAccountDialog(); $('accountDialog').showModal(); return; }
+    if (!authUser) { updateAccountDialog(); openAppDialog($('accountDialog')); return; }
     $('todaySongPickerSearch').value = '';
     renderTodaySongPicker();
-    $('todaySongPickerDialog').showModal();
+    openAppDialog($('todaySongPickerDialog'));
     $('todaySongPickerSearch').focus();
   });
   $('todaySongPickerSearch').addEventListener('input', renderTodaySongPicker);
@@ -2829,7 +3081,7 @@ function bindEvents() {
     await placeSongInToday(button.dataset.addToToday);
     renderTodaySongPicker();
   });
-  $('accountButton').addEventListener('click', () => { updateAccountDialog(); $('accountDialog').showModal(); });
+  $('accountButton').addEventListener('click', () => { updateAccountDialog(); openAppDialog($('accountDialog')); });
   $('accountModeButton').addEventListener('click', () => { authMode = authMode === 'login' ? 'register' : 'login'; updateAccountDialog(); });
   $('accountForm').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -2841,7 +3093,7 @@ function bindEvents() {
       if (registering && result.recoveryCode) {
         $('accountDialog').close();
         $('recoveryCodeValue').textContent = result.recoveryCode;
-        $('recoveryCodeDialog').showModal();
+        openAppDialog($('recoveryCodeDialog'));
       }
       await loadPrivateLibrary(result.user);
       renderGroupPanel();
@@ -2861,7 +3113,7 @@ function bindEvents() {
   $('forgotPasswordButton').addEventListener('click', () => {
     $('resetEmail').value = $('accountEmail').value.trim();
     $('resetPasswordError').hidden = true;
-    $('resetPasswordDialog').showModal();
+    openAppDialog($('resetPasswordDialog'));
   });
   $('resetPasswordForm').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -2890,7 +3142,7 @@ function bindEvents() {
     try {
       const result = await api('/api/me/recovery-code', { method: 'POST', body: '{}' });
       $('recoveryCodeValue').textContent = result.recoveryCode;
-      $('recoveryCodeDialog').showModal();
+      openAppDialog($('recoveryCodeDialog'));
     } catch (error) { notify(error.message || 'สร้าง recovery code ไม่สำเร็จ'); }
   });
   $('logoutButton').addEventListener('click', async () => {
@@ -2909,6 +3161,11 @@ function bindEvents() {
     groups = [];
     activeGroup = null;
     sharedSongs = [];
+    sharedSongsGroupId = null;
+    searchGroupLibraries.clear();
+    pendingSearchGroupLoads.clear();
+    $('searchInput').value = '';
+    searchScope = 'all';
     notifications = [];
     activeMainTab = 'today';
     renderGroupPanel();
@@ -2919,7 +3176,7 @@ function bindEvents() {
   });
   $('inboxButton').addEventListener('click', async () => {
     try { await refreshNotifications(); } catch (error) { notify(error.message); }
-    $('inboxDialog').showModal();
+    openAppDialog($('inboxDialog'));
   });
   document.querySelectorAll('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => $(button.dataset.closeDialog).close()));
   $('notificationList').addEventListener('click', async (event) => {
@@ -2948,7 +3205,7 @@ function bindEvents() {
   $('groupNameForm').addEventListener('submit', saveGroupName);
   $('transferGroupOwnerButton').addEventListener('click', transferActiveGroupOwnership);
   $('deleteGroupButton').addEventListener('click', deleteActiveGroup);
-  $('addGroupSongButton').addEventListener('click', () => { groupSongPickerSource = canEditActiveGroup() ? 'group' : 'personal'; $('groupSongPickerSearch').value = ''; renderGroupSongPicker(); $('groupSongPickerDialog').showModal(); $('groupSongPickerSearch').focus(); });
+  $('addGroupSongButton').addEventListener('click', () => { groupSongPickerSource = canEditActiveGroup() ? 'group' : 'personal'; $('groupSongPickerSearch').value = ''; renderGroupSongPicker(); openAppDialog($('groupSongPickerDialog')); $('groupSongPickerSearch').focus(); });
   $('groupSongPickerSearch').addEventListener('input', renderGroupSongPicker);
   $('groupLibrarySearch').addEventListener('input', () => { songPages.groupLibrary = 0; renderGroupLibrary(); });
   $('weeklyHistorySearch').addEventListener('input', renderWeeklyRecords);
@@ -2972,7 +3229,7 @@ function bindEvents() {
     activeGroup = groups.find((group) => group.id === $('groupSelect').value) || null;
     activeWeeklySet = null;
     bulkSelection.groupSet.clear(); bulkSelection.groupLibrary.clear();
-    sharedSongs = [];
+    sharedSongs = []; sharedSongsGroupId = null;
     saveViewState();
     renderGroupPanel();
     try { if (activeGroup) await loadActiveGroup(); renderSongRows(); }
@@ -2993,7 +3250,7 @@ function bindEvents() {
     $('editServiceNameInput').value = activeWeeklySet.name || '';
     $('editServiceDateWeek').textContent = `เลือกวันเล่นใหม่ได้ · ชุดอื่นในวันเดียวกันยังแยกกันอยู่`;
     $('editServiceDateError').hidden = true;
-    $('editServiceDateDialog').showModal();
+    openAppDialog($('editServiceDateDialog'));
   });
   $('editServiceDateForm').addEventListener('submit', saveWeeklyServiceDate);
   const createWeek = (copyPrevious) => {
@@ -3030,7 +3287,7 @@ function bindEvents() {
     $('inviteRoleHint').textContent = activeGroupRole() === 'viewer'
       ? 'สิทธิ์ของคุณเชิญได้เฉพาะสมาชิกที่ดูเพลงได้'
       : 'ผู้ดูเชิญได้เฉพาะผู้ดู · เจ้าของหรือผู้แก้ไขเลือกผู้ดูหรือผู้แก้ไขได้';
-    $('inviteDialog').showModal();
+    openAppDialog($('inviteDialog'));
   });
   $('inviteSearch').addEventListener('input', async () => {
     const query = $('inviteSearch').value.trim();
@@ -3069,12 +3326,12 @@ function bindEvents() {
     if (!event.target.closest('#manageGroupMembersButton') || !activeGroup) return;
     $('memberSearchInput').value = '';
     $('memberRoleFilter').value = '';
-    $('groupMembersDialog').showModal();
+    openAppDialog($('groupMembersDialog'));
     loadMemberDirectory(0);
   });
   $('groupSignInButton').addEventListener('click', () => {
     updateAccountDialog();
-    $('accountDialog').showModal();
+    openAppDialog($('accountDialog'));
   });
   $('memberSearchInput').addEventListener('input', () => {
     clearTimeout(memberSearchTimer);
@@ -3170,22 +3427,50 @@ function bindEvents() {
     });
     $(columnsId).addEventListener('click', () => {
       const button = $(columnsId);
-      button.setAttribute('aria-pressed', String(button.getAttribute('aria-pressed') !== 'true'));
+      const isEnabled = button.getAttribute('aria-pressed') === 'true';
+      if (!isEnabled && !window.matchMedia('(min-width: 761px)').matches) {
+        notify('สองคอลัมน์ใช้ได้บนจอกว้าง เช่น iPad จอคอม');
+        return;
+      }
+      button.setAttribute('aria-pressed', String(!isEnabled));
       setFitLayout($(targetId), $(fitId).getAttribute('aria-pressed') === 'true', button.getAttribute('aria-pressed') === 'true');
       if (targetId === 'readerChords') saveReaderPreferences();
     });
   }
-  $('searchResults').addEventListener('click', (event) => {
+  $('searchResults').addEventListener('click', async (event) => {
     const result = event.target.closest('[data-open-search-song]');
     if (result) {
-      const context = result.dataset.searchContext;
-      const song = (['group', 'groupLibrary'].includes(context) ? sharedSongs : songs).find((item) => item.id === result.dataset.openSearchSong);
-      if (song) openReader(song, context);
+      await openSearchSong(result);
+      return;
     }
-    if (event.target.closest('#searchAddSongButton')) { openEditor(makeBlankSong()); $('songTitle').value = $('searchInput').value.trim(); }
+    if (event.target.closest('#searchAddSongButton')) openEditor(makeBlankSong());
+    if (event.target.closest('#retrySearchButton')) renderSearchResults($('searchInput').value.trim());
+    if (event.target.closest('#searchLoginButton')) {
+      updateAccountDialog();
+      openAppDialog($('accountDialog'));
+    }
+  });
+  $('clearSearchButton').addEventListener('click', () => {
+    $('searchInput').value = '';
+    searchScope = 'all';
+    document.querySelectorAll('[data-search-scope]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.searchScope === 'all')));
+    renderSongRows();
+    $('searchInput').focus();
+  });
+  $('searchScopeFilters').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-search-scope]');
+    if (!button) return;
+    searchScope = button.dataset.searchScope;
+    document.querySelectorAll('[data-search-scope]').forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
+    renderSearchResults($('searchInput').value.trim());
   });
   $('saveSongButton').addEventListener('click', saveCurrentSong);
-  $('searchInput').addEventListener('input', renderSongRows);
+  $('searchInput').addEventListener('input', () => {
+    if ($('searchInput').value.trim()) {
+      syncSearchVisibility();
+      renderSearchResults($('searchInput').value.trim());
+    } else renderSongRows();
+  });
   ['songTitle', 'songArtist'].forEach((id) => $(id).addEventListener('input', updatePreview));
   $('chordText').addEventListener('input', () => {
     previousFormatText = null;
@@ -3222,7 +3507,7 @@ function bindEvents() {
   $('readerFontSize').addEventListener('input', () => { applyCompactText($('readerChords'), Number($('readerFontSize').value), Number($('readerLineSpacing').value), $('readerFitButton').getAttribute('aria-pressed') === 'true'); saveReaderPreferences(); });
   $('lineSpacingRange').addEventListener('input', updatePreview);
   $('readerLineSpacing').addEventListener('input', () => { applyCompactText($('readerChords'), Number($('readerFontSize').value), Number($('readerLineSpacing').value), $('readerFitButton').getAttribute('aria-pressed') === 'true'); saveReaderPreferences(); });
-  $('backupButton').addEventListener('click', () => $('fileTransferDialog').showModal());
+  $('backupButton').addEventListener('click', () => openAppDialog($('fileTransferDialog')));
   $('exportPersonalButton').addEventListener('click', downloadBackup);
   $('exportGroupButton').addEventListener('click', downloadGroupBackup);
   $('importTargetSelect').addEventListener('change', updateImportTargetHelp);
