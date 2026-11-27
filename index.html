@@ -68,10 +68,11 @@
           <section id="groupPanel" class="group-panel" hidden aria-labelledby="groupHeading">
             <div class="group-heading">
               <div><p class="eyebrow">SHARED WORSHIP SET</p><h2 id="groupHeading">กลุ่มเพลง</h2></div>
-              <div class="group-tools"><select id="groupSelect" aria-label="เลือกกลุ่มเพลง"></select><button class="quiet-button" id="prepareOfflineGroupButton" disabled aria-describedby="groupOfflineHelp" title="บันทึกสำเนาเพลงกลุ่มลงอุปกรณ์นี้ เพื่อเปิดดูได้เมื่อไม่มีอินเทอร์เน็ต">บันทึกไว้ดูออฟไลน์</button><button class="quiet-button" id="manageGroupButton" hidden>ตั้งค่ากลุ่ม</button><button class="quiet-button" id="createGroupButton">＋ สร้างกลุ่ม</button><button class="quiet-button" id="inviteGroupButton" disabled>เชิญสมาชิก</button></div>
+              <div id="groupTools" class="group-tools"><select id="groupSelect" aria-label="เลือกกลุ่มเพลง"></select><button class="quiet-button" id="prepareOfflineGroupButton" disabled aria-describedby="groupOfflineHelp" title="บันทึกชุดที่เลือกลงอุปกรณ์นี้เพื่อเปิดอ่านเมื่อไม่มีอินเทอร์เน็ต">บันทึกชุดนี้ไว้ออฟไลน์</button><button class="quiet-button" id="manageGroupButton" hidden>ตั้งค่ากลุ่ม</button><button class="quiet-button" id="createGroupButton">＋ สร้างกลุ่ม</button><button class="quiet-button" id="inviteGroupButton" disabled>เชิญสมาชิก</button></div>
             </div>
+            <div id="groupSignInPrompt" class="group-sign-in-prompt" hidden><div><strong>เข้าสู่ระบบเพื่อใช้เพลงกลุ่ม</strong><p>สร้างกลุ่มหรือเข้าร่วมกลุ่ม เพื่อจัดชุดเพลงและแชร์กับทีม</p></div><button id="groupSignInButton" class="primary-button" type="button">เข้าสู่ระบบ / สมัครสมาชิก</button></div>
             <div id="weeklySetTools" class="weekly-set-tools" hidden>
-              <label>ชุดที่เปิดอยู่<select id="weeklySetSelect" aria-label="เลือกชุดเพลงตามวันที่เล่น"></select></label>
+              <label><span id="weeklySetSelectLabel">เลือกชุดเล่น</span><select id="weeklySetSelect" aria-label="เลือกชุดเพลงตามวันที่เล่น"></select><span id="weeklySetSelectHelp" class="hint">ชุดเก่าที่เล่นแล้วอยู่ใน “ชุดย้อนหลัง”</span></label>
               <details id="createWeeklySetDetails" class="create-weekly-set"><summary>＋ สร้างชุดเพลง</summary>
                 <p>สร้างได้หลายชุดต่อสัปดาห์และใช้วันเล่นเดียวกันได้ ตั้งชื่อแยกแต่ละชุดได้</p>
                 <label>วันที่ใช้เล่นชุดใหม่<input id="weeklyServiceDate" type="date" aria-label="วันที่ใช้เล่นชุดใหม่" /></label>
@@ -80,8 +81,12 @@
                 <div class="create-weekly-actions"><button id="createWeeklySetButton" class="quiet-button" type="button">คัดลอกรายการเพลงชุดนี้</button><button id="createEmptyWeeklySetButton" class="quiet-button" type="button">เริ่มชุดว่าง</button></div>
               </details>
             </div>
-            <div class="weekly-record-tools">
-              <details id="weeklyHistoryDetails" class="weekly-record-panel"><summary>ชุดย้อนหลัง <span id="weeklyHistoryCount">0 ชุด</span></summary><p>ใช้ดูชุดที่เคยเล่นหรือคัดลอกรายการมาใช้ใหม่</p><label class="search-box"><span aria-hidden="true">⌕</span><input id="weeklyHistorySearch" type="search" placeholder="ค้นชื่อชุดหรือวันที่" /></label><div id="weeklyHistoryList" class="weekly-record-list"></div></details>
+            <section id="groupSetPlayCard" class="group-set-play-card" aria-labelledby="groupSetPlayTitle">
+              <div class="group-set-play-copy"><p class="eyebrow">ชุดที่เลือก · <span id="groupSetPlayDate">เลือกวันที่เล่น</span></p><h3 id="groupSetPlayTitle">เลือกชุดเพลงเพื่อเริ่มเล่น</h3><p id="groupSetPlayMeta" class="hint">รายการเพลงที่เลือกจะปรากฏตรงนี้</p></div>
+              <button id="startGroupSetButton" type="button" class="primary-button"><span aria-hidden="true">▶</span> เริ่มเล่นชุดนี้</button>
+            </section>
+            <div id="weeklyRecordTools" class="weekly-record-tools">
+              <details id="weeklyHistoryDetails" class="weekly-record-panel"><summary>ชุดย้อนหลัง <span id="weeklyHistoryCount">0 ชุด</span></summary><p>เปิดดูชุดที่เล่นแล้วหรือใช้เป็นต้นแบบสร้างชุดใหม่</p><label class="search-box"><span aria-hidden="true">⌕</span><input id="weeklyHistorySearch" type="search" placeholder="ค้นชื่อชุดหรือวันที่" /></label><div id="weeklyHistoryList" class="weekly-record-list"></div></details>
               <details id="weeklyTrashDetails" class="weekly-record-panel"><summary>ถังขยะ <span id="weeklyTrashCount">0 ชุด</span></summary><p>กู้คืนได้ภายใน 30 วัน หลังจากนั้นระบบลบถาวร</p><div id="weeklyTrashList" class="weekly-record-list"></div></details>
             </div>
             <p id="groupOfflineHelp" class="group-offline-help" hidden></p>
@@ -89,7 +94,7 @@
             <p id="groupEmptyState" class="group-empty">สร้างกลุ่มเพื่อแชร์เพลงและลำดับเพลงกับทีมแบบเรียลไทม์</p>
             <p id="groupDropHint" class="group-drop-hint" hidden>ลากเพลงจากคลังส่วนตัวมาวาง เพื่อเพิ่มเพลงเข้าคลังกลุ่ม</p>
             <div id="groupMembers" class="group-members"></div>
-            <div class="weekly-songs-heading"><div><h3 id="weeklySetHeading" class="group-list-heading">เพลงในชุดสัปดาห์นี้</h3><button id="editWeeklyServiceDateButton" class="text-button" type="button" hidden>แก้วัน / ชื่อชุด</button><button id="trashWeeklySetButton" class="text-button danger-text-button" type="button" hidden>ย้ายชุดนี้ไปถังขยะ</button></div><button id="addGroupSongButton" class="primary-button" type="button" hidden>＋ เพิ่มเพลงในชุด</button></div>
+            <div id="weeklySongsHeading" class="weekly-songs-heading"><div><h3 id="weeklySetHeading" class="group-list-heading">เพลงในชุดสัปดาห์นี้</h3><button id="editWeeklyServiceDateButton" class="text-button" type="button" hidden>แก้วัน / ชื่อชุด</button><button id="trashWeeklySetButton" class="text-button danger-text-button" type="button" hidden>ย้ายชุดนี้ไปถังขยะ</button></div><button id="addGroupSongButton" class="primary-button" type="button" hidden>＋ เพิ่มเพลงในชุด</button></div>
             <div id="groupSetBulkToolbar" class="bulk-toolbar" data-bulk-context="groupSet" hidden></div>
             <div id="groupSongList" class="group-song-list" aria-live="polite"></div>
             <div id="groupSongsPager" class="song-pagination"></div>

@@ -207,6 +207,10 @@ async function enterOfflineMode(message = 'ฐานข้อมูล/อิน
     notify('การแก้เพลงกลุ่มต้องเชื่อมต่ออินเทอร์เน็ต');
   }
   if (['group', 'groupLibrary'].includes(readerContext) && !$('readerView').hidden && !offlineGroupSnapshot) showView('library');
+  if (['group', 'groupLibrary'].includes(readerContext) && !$('readerView').hidden && offlineGroupSnapshot) {
+    $('readerEditButton').hidden = true;
+    setReaderKeyGuidance(readerContext);
+  }
   const count = await getSyncQueue().then((queue) => queue.length).catch(() => 0);
   const snapshotNote = snapshot ? ` · กลุ่ม “${snapshot.group.name}” เปิดสำเนาล่าสุดได้ · ซิงก์ ${new Date(snapshot.savedAt).toLocaleString('th-TH')}` : '';
   setConnectivityBanner(`ออฟไลน์ · ${message}${snapshotNote} · แก้เพลงส่วนตัว/เพลงวันนี้ได้ · ${count} รายการรอซิงก์`);
@@ -1041,12 +1045,12 @@ function renderWeeklyRecords() {
   const activeSets = allSets.filter((set) => !set.deletedAt);
   const trashed = allSets.filter((set) => Boolean(set.deletedAt)).sort((a, b) => String(b.deletedAt).localeCompare(String(a.deletedAt)));
   const today = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const history = activeSets.filter((set) => serviceDateForSet(set) < today).sort((a, b) => serviceDateForSet(b).localeCompare(serviceDateForSet(a)));
+  const history = activeSets.filter((set) => serviceDateForSet(set) < today && set.id !== activeGroup.activeSetId && set.id !== activeWeeklySet?.id).sort((a, b) => serviceDateForSet(b).localeCompare(serviceDateForSet(a)));
   const query = $('weeklyHistorySearch').value.trim().toLocaleLowerCase('th-TH');
   const filtered = history.filter((set) => `${set.name || ''} ${serviceDateForSet(set)}`.toLocaleLowerCase('th-TH').includes(query));
   $('weeklyHistoryCount').textContent = `${history.length} ชุด`;
   $('weeklyTrashCount').textContent = `${trashed.length} ชุด`;
-  $('weeklyHistoryList').innerHTML = filtered.map((set) => `<article class="weekly-record-row"><button type="button" class="weekly-record-open" data-open-weekly-set="${escapeHtml(set.id)}"><strong>${escapeHtml(set.name || 'ชุดเพลง')}</strong><small>${escapeHtml(serviceDateForSet(set))} · ${(set.songIds || []).length} เพลง</small></button>${canEditActiveGroup() && !offlineMode && activeSets.length > 1 ? `<button type="button" class="quiet-button danger-text-button" data-trash-weekly-set="${escapeHtml(set.id)}">ย้ายไปถังขยะ</button>` : ''}</article>`).join('') || `<p class="group-empty">${query ? 'ไม่พบชุดที่ค้นหา' : 'ยังไม่มีชุดย้อนหลัง'}</p>`;
+  $('weeklyHistoryList').innerHTML = filtered.map((set) => `<article class="weekly-record-row"><button type="button" class="weekly-record-open" data-open-weekly-set="${escapeHtml(set.id)}"><strong>${escapeHtml(set.name || 'ชุดเพลง')}</strong><small>${escapeHtml(serviceDateForSet(set))} · ${(set.songIds || []).length} เพลง · เปิดดูชุดนี้</small></button>${canEditActiveGroup() && !offlineMode && activeSets.length > 1 ? `<button type="button" class="quiet-button danger-text-button" data-trash-weekly-set="${escapeHtml(set.id)}">ย้ายไปถังขยะ</button>` : ''}</article>`).join('') || `<p class="group-empty">${query ? 'ไม่พบชุดที่ค้นหา' : 'ยังไม่มีชุดย้อนหลัง'}</p>`;
   $('weeklyTrashList').innerHTML = trashed.map((set) => {
     const daysLeft = Math.max(0, Math.ceil((new Date(set.expiresAt || new Date(new Date(set.deletedAt).getTime() + 30 * 86400000)).getTime() - Date.now()) / 86400000));
     return `<article class="weekly-record-row"><span><strong>${escapeHtml(set.name || 'ชุดเพลง')}</strong><small>${escapeHtml(serviceDateForSet(set))} · ${(set.songIds || []).length} เพลง · ลบถาวรใน ${daysLeft} วัน</small></span>${canEditActiveGroup() && !offlineMode ? `<button type="button" class="quiet-button" data-restore-weekly-set="${escapeHtml(set.id)}">กู้คืน</button>` : ''}</article>`;
@@ -1054,7 +1058,10 @@ function renderWeeklyRecords() {
 }
 
 function renderGroupPanel() {
-  $('groupPanel').hidden = activeMainTab !== 'group' || !authUser || (offlineMode && !offlineGroupSnapshot);
+  const signedOut = !authUser;
+  $('groupPanel').hidden = activeMainTab !== 'group' || (offlineMode && !offlineGroupSnapshot);
+  $('groupSignInPrompt').hidden = !signedOut;
+  $('groupTools').hidden = signedOut;
   $('inboxButton').hidden = !authUser || offlineMode;
   $('accountButtonLabel').textContent = authUser ? (authUser.displayName || authUser.email.split('@')[0]) : 'เข้าสู่ระบบ';
   $('localBadgeText').textContent = offlineMode ? 'ออฟไลน์ · แก้ไขรอซิงก์' : authUser ? 'ซิงก์เพลงกับบัญชี' : 'เข้าสู่ระบบเพื่อดูเพลง';
@@ -1074,15 +1081,28 @@ function renderGroupPanel() {
   updateImportTargetHelp();
   $('groupSelect').disabled = groups.length === 0 || offlineMode;
   if (activeGroup) $('groupSelect').value = activeGroup.id;
-  $('weeklySetTools').hidden = !activeGroup;
+  $('weeklySetTools').hidden = !activeGroup || signedOut;
   const allSets = activeGroup?.weeklySets || [];
   const sets = allSets.filter((set) => !set.deletedAt);
-  $('weeklySetSelect').innerHTML = sets.slice().sort((a, b) => b.start.localeCompare(a.start)).map((set) => {
+  const today = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const selectableSets = offlineMode
+    ? sets.filter((set) => set.id === activeWeeklySet?.id)
+    : sets.filter((set) => {
+      const date = serviceDateForSet(set);
+      return !date || date >= today || set.id === activeGroup?.activeSetId || set.id === activeWeeklySet?.id;
+    });
+  $('weeklySetSelectLabel').textContent = offlineMode ? 'ชุดที่บันทึกไว้' : 'เลือกชุดเล่น';
+  $('weeklySetSelect').innerHTML = selectableSets.slice().sort((a, b) => String(serviceDateForSet(b)).localeCompare(String(serviceDateForSet(a)))).map((set) => {
     const date = serviceDateForSet(set);
     const label = date ? new Intl.DateTimeFormat('th-TH', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`)) : (set.name || 'ชุดเพลง');
     return `<option value="${escapeHtml(set.id)}">${escapeHtml(set.name || label)} · ${label}${set.id === activeGroup?.activeSetId ? ' · ชุดหลัก' : ''} · ${(set.songIds || []).length} เพลง</option>`;
   }).join('');
   if (activeWeeklySet) $('weeklySetSelect').value = activeWeeklySet.id;
+  $('weeklySetSelect').disabled = offlineMode || selectableSets.length < 2;
+  $('weeklySetSelect').title = offlineMode ? 'ออฟไลน์เปิดได้เฉพาะชุดที่บันทึกไว้ · เชื่อมต่อเพื่อเลือกชุดอื่น' : '';
+  $('weeklySetSelectHelp').textContent = offlineMode
+    ? 'ออฟไลน์เปิดได้เฉพาะชุดที่บันทึกไว้ · ชุดอื่นต้องเชื่อมต่ออินเทอร์เน็ต'
+    : 'ชุดที่เล่นแล้วเปิดจาก “ชุดย้อนหลัง”';
   if (!$('weeklyServiceDate').value) {
     $('weeklyServiceDate').value = nextAvailableServiceDate(sets);
   }
@@ -1091,31 +1111,43 @@ function renderGroupPanel() {
   const activeServiceDate = activeWeeklySet?.serviceDate || activeWeeklySet?.end || '';
   const activeServiceLabel = activeServiceDate ? new Intl.DateTimeFormat('th-TH', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' }).format(new Date(`${activeServiceDate}T12:00:00Z`)) : '';
   $('weeklySetHeading').textContent = activeWeeklySet ? `เพลงสำหรับ${activeServiceLabel || 'วันที่เล่น'}${activeWeeklySet.id === activeGroup?.activeSetId ? ' · ชุดปัจจุบัน' : ' · ชุดย้อนหลัง'}` : 'เพลงในชุดที่เลือก';
+  $('groupSetPlayCard').hidden = signedOut || !activeGroup;
+  $('groupSetPlayDate').textContent = activeServiceLabel || 'ยังไม่กำหนดวัน';
+  $('groupSetPlayTitle').textContent = activeWeeklySet?.name || (activeWeeklySet ? 'ชุดเพลงนมัสการ' : 'เลือกชุดเพลงเพื่อเริ่มเล่น');
+  const groupSetCount = activeSetSongs.length;
+  const nextGroupSong = activeSetSongs[0]?.title || '';
+  $('groupSetPlayMeta').textContent = activeWeeklySet
+    ? `${groupSetCount} เพลง${nextGroupSong ? ` · เพลงแรก: ${nextGroupSong}` : ' · เพิ่มเพลงเพื่อเริ่มจัดชุด'}`
+    : 'เลือกชุดเพลงจากรายการด้านบน';
+  $('startGroupSetButton').disabled = !activeWeeklySet || groupSetCount === 0;
+  $('startGroupSetButton').title = groupSetCount ? 'เปิดเพลงแรกและแสดงรายการเพลงชุดนี้' : 'เพิ่มเพลงในชุดก่อนเริ่มเล่น';
   $('editWeeklyServiceDateButton').hidden = !activeWeeklySet || !canEditActiveGroup() || offlineMode;
   $('trashWeeklySetButton').hidden = !activeWeeklySet || !canEditActiveGroup() || offlineMode || sets.length <= 1;
-  $('weeklyHistoryDetails').hidden = !activeGroup;
+  $('weeklyRecordTools').hidden = signedOut || !activeGroup;
+  $('weeklyHistoryDetails').hidden = !activeGroup || offlineMode;
   $('weeklyTrashDetails').hidden = !activeGroup || !canEditActiveGroup() || offlineMode;
   renderWeeklyRecords();
   updateWeeklyCreateDateHint();
-  const offlineGroupPrepared = Boolean(activeGroup && localStorage.getItem(`${READER_PREFS_KEY}.offlineGroup`) === activeGroup.id);
+  const offlineGroupPrepared = Boolean(activeGroup && activeWeeklySet && localStorage.getItem(`${READER_PREFS_KEY}.offlineGroup`) === activeGroup.id && localStorage.getItem(`${READER_PREFS_KEY}.offlineGroupSet`) === activeWeeklySet.id);
   $('prepareOfflineGroupButton').hidden = !activeGroup;
   $('prepareOfflineGroupButton').disabled = offlineMode || !activeGroup;
-  $('prepareOfflineGroupButton').textContent = offlineGroupPrepared ? 'บันทึกไว้แล้ว ✓' : 'บันทึกไว้ดูออฟไลน์';
+  $('prepareOfflineGroupButton').textContent = offlineGroupPrepared ? 'ชุดนี้บันทึกแล้ว ✓' : 'บันทึกชุดนี้ไว้ออฟไลน์';
   $('manageGroupButton').hidden = !activeGroup || offlineMode || activeGroupRole() !== 'owner';
   $('groupOfflineHelp').hidden = !activeGroup || offlineMode;
   $('groupOfflineHelp').textContent = offlineGroupPrepared
-    ? 'บันทึกเพลงกลุ่มนี้ไว้ในอุปกรณ์แล้ว เปิดดูได้เมื่อไม่มีอินเทอร์เน็ต (อ่านอย่างเดียว) · ไม่ได้เพิ่มลงเพลงของฉัน'
-    : 'บันทึกสำเนาเพลงกลุ่มไว้ในอุปกรณ์นี้ เพื่อเปิดดูเมื่อไม่มีอินเทอร์เน็ต · ใช้ได้เฉพาะเครื่องนี้ และขณะออฟไลน์จะอ่านได้อย่างเดียว';
+    ? `บันทึก “${activeWeeklySet?.name || 'ชุดที่เลือก'}” ไว้ในอุปกรณ์แล้ว · เปิดอ่านได้เมื่อออฟไลน์`
+    : 'บันทึกชุดที่เลือกไว้ในอุปกรณ์นี้ เพื่อเปิดอ่านเมื่อออฟไลน์ · ใช้ได้เฉพาะเครื่องนี้ และแก้เพลงกลุ่มไม่ได้';
   $('groupOfflineStatus').hidden = !offlineGroupSnapshot;
-  if (offlineGroupSnapshot) $('groupOfflineStatus').textContent = 'กำลังเปิดสำเนาเพลงกลุ่มจากอุปกรณ์นี้ · อ่านอย่างเดียว · การเปลี่ยนคีย์มีผลเฉพาะอุปกรณ์นี้';
+  if (offlineGroupSnapshot) $('groupOfflineStatus').textContent = `กำลังเปิด “${activeWeeklySet?.name || 'ชุดที่บันทึกไว้'}” จากอุปกรณ์นี้ · อ่านอย่างเดียว · การเปลี่ยนคีย์มีผลเฉพาะอุปกรณ์นี้`;
   $('inviteGroupButton').disabled = offlineMode || !activeGroup || !activeGroupRole();
   $('addGroupSongButton').hidden = !canEditActiveGroup() || offlineMode;
   $('groupLibraryDetails').hidden = !activeGroup;
   $('groupSuggestionDetails').hidden = !activeGroup || !canEditActiveGroup() || offlineMode;
   $('groupDropHint').hidden = !canEditActiveGroup() || offlineMode;
   $('libraryDropHint').hidden = !activeGroup || offlineMode;
-  $('groupEmptyState').hidden = Boolean(activeGroup);
+  $('groupEmptyState').hidden = signedOut || Boolean(activeGroup);
   $('groupEmptyState').textContent = groups.length ? 'เลือกกลุ่มเพื่อดูเพลงและสมาชิก' : 'สร้างกลุ่มเพื่อแชร์เพลงและลำดับเพลงกับทีมแบบเรียลไทม์';
+  $('weeklySongsHeading').hidden = signedOut || !activeGroup;
   renderGroupMembers();
   renderGroupSongs();
   renderGroupLibrary();
@@ -1280,7 +1312,10 @@ async function loadGroups(preferredId = activeGroup?.id) {
   const result = await api('/api/groups');
   groups = result.groups;
   const pinnedOfflineGroup = localStorage.getItem(`${READER_PREFS_KEY}.offlineGroup`);
-  if (pinnedOfflineGroup && !groups.some((group) => group.id === pinnedOfflineGroup)) localStorage.removeItem(`${READER_PREFS_KEY}.offlineGroup`);
+  if (pinnedOfflineGroup && !groups.some((group) => group.id === pinnedOfflineGroup)) {
+    localStorage.removeItem(`${READER_PREFS_KEY}.offlineGroup`);
+    localStorage.removeItem(`${READER_PREFS_KEY}.offlineGroupSet`);
+  }
   offlineGroupSnapshot = false;
   activeGroup = groups.find((group) => group.id === preferredId) || groups[0] || null;
   if (previousGroupId && previousGroupId !== activeGroup?.id) sendRealtime({ type: 'unsubscribe', groupId: previousGroupId });
@@ -1342,16 +1377,17 @@ async function loadActiveGroup() {
 }
 
 async function prepareActiveGroupOffline() {
-  if (!activeGroup || offlineMode || !sharedSongs.length) { notify('เชื่อมต่อและเลือกกลุ่มที่มีเพลงก่อน'); return; }
+  if (!activeGroup || !activeWeeklySet || offlineMode || (!sharedSongs.length && !activeSetSongs.length)) { notify('เชื่อมต่อและเลือกชุดเพลงก่อน'); return; }
   try {
-    const result = await api(`/api/groups/${encodeURIComponent(activeGroup.id)}`);
+    const result = await api(`/api/groups/${encodeURIComponent(activeGroup.id)}?setId=${encodeURIComponent(activeWeeklySet.id)}`);
     activeGroup = result.group;
     sharedSongs = result.librarySongs || result.songs; activeWeeklySet = result.activeSet; activeSetSongs = result.songs;
     await saveGroupSnapshot({ id: activeGroup.id, group: activeGroup, songs: sharedSongs, activeSet: activeWeeklySet, setSongs: activeSetSongs, savedAt: Date.now() });
     localStorage.setItem(`${READER_PREFS_KEY}.offlineGroup`, activeGroup.id);
+    localStorage.setItem(`${READER_PREFS_KEY}.offlineGroupSet`, activeWeeklySet.id);
     offlineGroupSnapshot = false;
     renderGroupPanel();
-    notify(`เตรียม “${activeGroup.name}” ไว้เปิดอ่านออฟไลน์แล้ว`);
+    notify(`บันทึก “${activeWeeklySet.name || 'ชุดที่เลือก'}” ไว้เปิดอ่านออฟไลน์แล้ว`);
   } catch (error) { notify(error.message || 'เตรียมกลุ่มออฟไลน์ไม่สำเร็จ'); }
 }
 
@@ -1574,11 +1610,7 @@ async function setGroupDisplayKey(key) {
   }
   if (key === (currentSong.displayKey || currentSong.key || 'C')) return true;
   if (offlineMode && offlineGroupSnapshot) {
-    currentSong = { ...currentSong, displayKey: key };
-    $('readerKeySelect').value = key;
-    renderChordContent($('readerChords'), currentSong, key);
-    notify(`เปลี่ยนคีย์เฉพาะเครื่องนี้เป็น ${key} · ไม่ได้เปลี่ยนเพลงในกลุ่ม`);
-    return true;
+    return setOfflineGroupDisplayKey(key);
   }
   try {
     const result = await api(`/api/groups/${encodeURIComponent(activeGroup.id)}/sets/${encodeURIComponent(activeWeeklySet.id)}/songs/${encodeURIComponent(currentSong.id)}/display-key`, {
@@ -1608,6 +1640,21 @@ async function setGroupDisplayKey(key) {
   }
 }
 
+async function setOfflineGroupDisplayKey(key) {
+  if (!offlineMode || !offlineGroupSnapshot || !currentSong || !activeGroup) return false;
+  currentSong = { ...currentSong, displayKey: key };
+  if (readerContext === 'group') activeSetSongs = activeSetSongs.map((song) => song.id === currentSong.id ? currentSong : song);
+  else if (readerContext === 'groupLibrary') sharedSongs = sharedSongs.map((song) => song.id === currentSong.id ? currentSong : song);
+  await saveGroupSnapshot({ id: activeGroup.id, group: activeGroup, songs: sharedSongs, activeSet: activeWeeklySet, setSongs: activeSetSongs, savedAt: Date.now() }).catch(() => {});
+  renderGroupSongs();
+  renderGroupLibrary();
+  $('readerKeySelect').value = key;
+  renderChordContent($('readerChords'), currentSong, key);
+  renderReaderQueue();
+  notify(`เปลี่ยนคีย์เฉพาะเครื่องนี้เป็น ${key} · ไม่ได้เปลี่ยนเพลงในกลุ่ม`);
+  return true;
+}
+
 function syncGroupSongInReader(songId) {
   if (!songId || currentSong?.id !== songId) return;
   const updated = readerContext === 'groupLibrary'
@@ -1617,7 +1664,7 @@ function syncGroupSongInReader(songId) {
   currentSong = updated;
   $('readerTitle').textContent = updated.title || 'เพลงไม่มีชื่อ';
   $('readerArtist').textContent = updated.artist || 'WORSHIP SONG';
-  $('readerEditButton').hidden = !canEditActiveGroup();
+  $('readerEditButton').hidden = !canEditActiveGroup() || offlineMode;
   setReaderKeyGuidance(readerContext);
   keyOptions($('readerKeySelect'), updated.displayKey || updated.key || 'C');
   renderChordContent($('readerChords'), updated, $('readerKeySelect').value);
@@ -1627,22 +1674,26 @@ function syncGroupSongInReader(songId) {
 function setReaderKeyGuidance(context) {
   const groupContext = context === 'group' || context === 'groupLibrary';
   const groupLibraryContext = context === 'groupLibrary';
-  const sharedEditor = groupContext && canEditActiveGroup();
+  const offlineGroupEditor = groupContext && canEditActiveGroup() && offlineMode && offlineGroupSnapshot;
+  const sharedEditor = groupContext && canEditActiveGroup() && !offlineMode;
   const sharedViewer = groupContext && !sharedEditor;
-  $('readerKeyLabel').textContent = sharedEditor ? (groupLibraryContext ? 'คีย์คลังกลุ่ม' : 'คีย์เพลงชุดนี้') : sharedViewer ? 'คีย์ส่วนตัว' : 'คีย์แสดงผล';
+  $('readerKeyLabel').textContent = sharedEditor ? (groupLibraryContext ? 'คีย์คลังกลุ่ม' : 'คีย์เพลงชุดนี้') : offlineGroupEditor ? 'คีย์เฉพาะเครื่องนี้' : sharedViewer ? 'คีย์ส่วนตัว' : 'คีย์แสดงผล';
   $('readerKeyScopeHint').textContent = sharedEditor
     ? (groupLibraryContext ? 'สมาชิกกลุ่มเห็นคีย์นี้ร่วมกัน · ชุดที่บันทึกไว้ไม่เปลี่ยน' : 'สมาชิกที่เปิดชุดนี้เห็นทันที · ชุดอื่นไม่เปลี่ยน')
-    : sharedViewer
+    : offlineGroupEditor
+      ? 'ออฟไลน์ · เปลี่ยนคีย์ได้เฉพาะอุปกรณ์นี้ และเก็บไว้กับสำเนาออฟไลน์'
+      : sharedViewer
       ? 'ปรับเฉพาะหน้าคุณ · ไม่เปลี่ยนคีย์ที่สมาชิกคนอื่นเห็น'
       : 'ปรับคอร์ดที่แสดงสำหรับคุณ · ไม่แก้เนื้อเพลงหรือคีย์ต้นฉบับ';
-  $('readerKeySelect').setAttribute('aria-label', sharedEditor ? 'เปลี่ยนคีย์เพลงสำหรับชุดที่เลือก' : sharedViewer ? 'ปรับคีย์เฉพาะหน้าคุณ' : 'เลือกคีย์แสดงผล');
+  $('readerKeySelect').setAttribute('aria-label', sharedEditor ? 'เปลี่ยนคีย์เพลงสำหรับชุดที่เลือก' : offlineGroupEditor || sharedViewer ? 'ปรับคีย์เฉพาะอุปกรณ์นี้' : 'เลือกคีย์แสดงผล');
   $('readerSourceKeyButton').title = sharedEditor
     ? (groupLibraryContext ? 'ตั้งคีย์ในคลังกลุ่มกลับเป็นคีย์ต้นฉบับ' : 'ตั้งคีย์ชุดนี้กลับเป็นคีย์ต้นฉบับ')
-    : 'แสดงเพลงในคีย์ต้นฉบับ';
+    : offlineGroupEditor ? 'แสดงเพลงในคีย์ต้นฉบับเฉพาะอุปกรณ์นี้' : 'แสดงเพลงในคีย์ต้นฉบับ';
   $('readerSourceKeyWarning').hidden = !groupContext || currentSong?.sourceKeyConfirmed === true;
 }
 
 async function setGroupLibraryDisplayKey(key) {
+  if (offlineMode && offlineGroupSnapshot) return setOfflineGroupDisplayKey(key);
   if (!currentSong || !activeGroup || !canEditActiveGroup() || offlineMode) return false;
   if (!await refreshInvalidGroupSongId()) {
     notify('รหัสเพลงในหน้าที่เปิดไม่ตรงกับคลังกลุ่มล่าสุด โหลดเพลงใหม่แล้วลองเปลี่ยนคีย์อีกครั้ง');
@@ -1813,7 +1864,10 @@ async function deleteActiveGroup() {
   if (!confirmed) return;
   try {
     await api(`/api/groups/${encodeURIComponent(group.id)}`, { method: 'DELETE' });
-    if (localStorage.getItem(`${READER_PREFS_KEY}.offlineGroup`) === group.id) localStorage.removeItem(`${READER_PREFS_KEY}.offlineGroup`);
+    if (localStorage.getItem(`${READER_PREFS_KEY}.offlineGroup`) === group.id) {
+      localStorage.removeItem(`${READER_PREFS_KEY}.offlineGroup`);
+      localStorage.removeItem(`${READER_PREFS_KEY}.offlineGroupSet`);
+    }
     $('groupSettingsDialog').close();
     activeGroup = null; sharedSongs = []; offlineGroupSnapshot = false;
     await loadGroups();
@@ -1865,6 +1919,7 @@ async function restoreWeeklySet(setId) {
 }
 
 async function openWeeklySet(setId) {
+  if (offlineMode) { notify('เชื่อมต่ออินเทอร์เน็ตเพื่อเปิดชุดย้อนหลัง'); return; }
   const set = activeGroup?.weeklySets?.find((item) => item.id === setId && !item.deletedAt);
   if (!set) return;
   activeWeeklySet = set;
@@ -2157,6 +2212,10 @@ function makeBlankSong() {
 }
 
 function openEditor(song = makeBlankSong(), groupId = null, setId = null) {
+  if (groupId && (offlineMode || !canEditActiveGroup())) {
+    notify(offlineMode ? 'แก้ไขเพลงกลุ่มต้องเชื่อมต่ออินเทอร์เน็ต' : 'คุณไม่มีสิทธิ์แก้ไขเพลงในกลุ่มนี้');
+    return;
+  }
   if (!groupId && !authUser) {
     updateAccountDialog();
     $('accountDialog').showModal();
@@ -2311,7 +2370,7 @@ function openReader(song, context = 'library') {
   readerContext = context;
   readerSongIds = readerContextSongs().map((item) => item.id);
   const groupContext = context === 'group' || context === 'groupLibrary';
-  $('readerEditButton').hidden = groupContext && !canEditActiveGroup();
+  $('readerEditButton').hidden = groupContext && (!canEditActiveGroup() || offlineMode);
   setReaderKeyGuidance(context);
   $('readerTitle').textContent = song.title || 'เพลงไม่มีชื่อ';
   $('readerArtist').textContent = song.artist || 'WORSHIP SONG';
@@ -2881,6 +2940,11 @@ function bindEvents() {
   });
   $('createGroupButton').addEventListener('click', () => openGroupSettings(true));
   $('manageGroupButton').addEventListener('click', () => openGroupSettings(false));
+  $('startGroupSetButton').addEventListener('click', () => {
+    const firstSong = activeSetSongs[0];
+    if (!firstSong) { notify('เพิ่มเพลงลงชุดนี้ก่อนเริ่มเล่น'); return; }
+    openReader(firstSong, 'group');
+  });
   $('groupNameForm').addEventListener('submit', saveGroupName);
   $('transferGroupOwnerButton').addEventListener('click', transferActiveGroupOwnership);
   $('deleteGroupButton').addEventListener('click', deleteActiveGroup);
@@ -2915,6 +2979,7 @@ function bindEvents() {
     catch (error) { notify(error.message); }
   });
   $('weeklySetSelect').addEventListener('change', async () => {
+    if (offlineMode) { renderGroupPanel(); notify('เชื่อมต่ออินเทอร์เน็ตเพื่อเปิดชุดอื่น'); return; }
     activeWeeklySet = activeGroup?.weeklySets?.find((set) => set.id === $('weeklySetSelect').value) || null;
     bulkSelection.groupSet.clear();
     songPages.group = 0;
@@ -3006,6 +3071,10 @@ function bindEvents() {
     $('memberRoleFilter').value = '';
     $('groupMembersDialog').showModal();
     loadMemberDirectory(0);
+  });
+  $('groupSignInButton').addEventListener('click', () => {
+    updateAccountDialog();
+    $('accountDialog').showModal();
   });
   $('memberSearchInput').addEventListener('input', () => {
     clearTimeout(memberSearchTimer);
@@ -3140,7 +3209,9 @@ function bindEvents() {
   $('fontSizeRange').addEventListener('input', updatePreview);
   $('readerKeySelect').addEventListener('change', async () => {
     const targetKey = $('readerKeySelect').value;
-    if (readerContext === 'group' && canEditActiveGroup()) {
+    if (offlineMode && offlineGroupSnapshot && ['group', 'groupLibrary'].includes(readerContext) && canEditActiveGroup()) {
+      await setOfflineGroupDisplayKey(targetKey);
+    } else if (readerContext === 'group' && canEditActiveGroup()) {
       await setGroupDisplayKey(targetKey);
     } else if (readerContext === 'groupLibrary' && canEditActiveGroup()) {
       await setGroupLibraryDisplayKey(targetKey);
