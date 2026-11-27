@@ -752,7 +752,7 @@ async function handleApi(req, res, url) {
         return json(res, 200, { ok: true });
       }
       if (body.action !== 'approve') throw new HttpError(400, 'เลือกว่าจะเพิ่มเพลงหรือปฏิเสธรายการ');
-      const allowedKeys = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+      const allowedKeys = ['C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B'];
       if (!allowedKeys.includes(body.key) || body.confirmSourceKey !== true) throw new HttpError(400, 'ตรวจและยืนยันคีย์ต้นฉบับก่อนเพิ่มเพลง');
       const fields = { ...safeSongInput(suggestion.song), key: body.key, sourceKeyConfirmed: true };
       const groupSongs = await database.collection('groupSongs').find({ groupId: group._id }).toArray();
@@ -1090,7 +1090,7 @@ async function handleApi(req, res, url) {
       if (Number(body.expectedRevision) !== expectedRevision) throw new HttpError(409, 'This set song changed on another device. Reload it before saving.', { song: { ...currentSnapshot, id: snapshotKey } });
       let updatedSnapshot;
       if (method === 'PATCH' && pathParts[7] === 'display-key') {
-        const allowedKeys = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+        const allowedKeys = ['C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B'];
         if (!allowedKeys.includes(body.key)) throw new HttpError(400, 'Invalid display key.');
         updatedSnapshot = { ...currentSnapshot, displayKey: body.key, revision: expectedRevision + 1, updatedBy: user._id.toString(), updatedAt: new Date() };
       } else {
@@ -1139,7 +1139,7 @@ async function handleApi(req, res, url) {
       if (!ObjectId.isValid(pathParts[4])) throw new HttpError(400, 'Invalid song id.');
       const songId = new ObjectId(pathParts[4]);
       const body = await readJson(req);
-      const allowedKeys = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+      const allowedKeys = ['C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B'];
       if (!allowedKeys.includes(body.key)) throw new HttpError(400, 'Invalid display key.');
       const song = await database.collection('groupSongs').findOne({ _id: songId, groupId: group._id });
       if (!song) throw new HttpError(404, 'Song not found in this group.');

@@ -3,9 +3,11 @@ const DB_VERSION = 4;
 const TODAY_SETLIST_ID = 'today';
 const API_BASE = String(window.WORSHIPCHORD_CONFIG?.apiBase || '').replace(/\/+$/, '');
 const LAST_USER_KEY = `${DB_NAME}-last-user`;
-const KEYS = ['C', 'C♯/D♭', 'D', 'D♯/E♭', 'E', 'F', 'F♯/G♭', 'G', 'G♯/A♭', 'A', 'A♯/B♭', 'B'];
+const KEY_NAMES = ['C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B'];
 const SHARP_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const FLAT_NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
+const FLAT_SPELLING_KEYS = new Set(['F', 'Db', 'Eb', 'Gb', 'Ab', 'Bb']);
+const SHARP_SPELLING_KEYS = new Set(['C#', 'D#', 'F#', 'G#', 'A#']);
 const NATURAL = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
 
 const $ = (id) => document.getElementById(id);
@@ -833,25 +835,30 @@ function strictChordToken(rawToken) {
   return pattern.test(token) ? token : null;
 }
 
-function transposeChord(chord, shift) {
+function transposeChord(chord, shift, targetKey = 'C') {
   const match = /^([A-G][#b]?)(.*)$/.exec(chord);
   if (!match) return chord;
   const root = parseRoot(match[1]);
   if (!root) return chord;
   let suffix = match[2];
   let bass = '';
+  const preferFlatsFor = (note) => FLAT_SPELLING_KEYS.has(targetKey)
+    || (!SHARP_SPELLING_KEYS.has(targetKey) && shift === 0 && note.includes('b'));
   const slash = /^(.*)\/([A-G][#b]?)$/.exec(suffix);
   if (slash) {
     suffix = slash[1];
     const bassRoot = parseRoot(slash[2]);
-    bass = `/${(FLAT_NAMES[(bassRoot.semitones + shift + 120) % 12])}`;
+    const names = preferFlatsFor(slash[2]) ? FLAT_NAMES : SHARP_NAMES;
+    bass = `/${names[(bassRoot.semitones + shift + 120) % 12]}`;
   }
-  const useFlat = /b/.test(match[1]);
+  const useFlat = preferFlatsFor(match[1]);
   const names = useFlat ? FLAT_NAMES : SHARP_NAMES;
   return `${names[(root.semitones + shift + 120) % 12]}${suffix}${bass}`;
 }
 
-const CHORD_EXPRESSION_PATTERN = /[A-G](?:#|b)?(?:(?:maj|min|m|dim|aug|sus2|sus4|sus|add\d{1,2}|\d{1,2})|-(?=$|[\s|,;:/(){}]))?(?:\/[A-G](?:#|b)?)?/g;
+// Keep this in sync with strictChordToken: chord quality extensions belong
+// after the quality too (e.g. Dm7, Em7, Fmaj7), not only after a bare root.
+const CHORD_EXPRESSION_PATTERN = /[A-G](?:#|b)?(?:(?:(?:maj|min|m|dim|aug|sus2|sus4|sus|add)(?:\d{1,2})?)|(?:\d{1,2}(?:sus2|sus4|sus|add\d{1,2})?)|-)?(?:\/[A-G](?:#|b)?)?/g;
 
 function isChordExpression(value) {
   const chords = value.match(CHORD_EXPRESSION_PATTERN) || [];
@@ -859,10 +866,10 @@ function isChordExpression(value) {
   return chords.length > 0 && /^[\s|,;:/(){}-]*$/.test(residue);
 }
 
-function transposeChordExpression(value, shift) {
+function transposeChordExpression(value, shift, targetKey) {
   return value.replace(CHORD_EXPRESSION_PATTERN, (chord) => {
     const parsed = strictChordToken(chord);
-    return parsed ? transposeChord(parsed, shift) : chord;
+    return parsed ? transposeChord(parsed, shift, targetKey) : chord;
   });
 }
 
@@ -876,7 +883,7 @@ function displayText(song, targetKey = song?.key || 'C') {
     const labeledList = /^(\s*(?:intro|midtro|interlude|ending|outro|bridge|tag|verse\s*\d*|pre[-\s]?chorus|chorus|post[-\s]?chorus|vamp|refrain|instrumental)\s*:\s*)(.*)$/i.exec(line);
     if (labeledList) {
       const suffix = labeledList[2];
-      if (isChordExpression(suffix)) return labeledList[1] + transposeChordExpression(suffix, shift);
+      if (isChordExpression(suffix)) return labeledList[1] + transposeChordExpression(suffix, shift, targetKey);
     }
     // Older imported songs may have an untagged chord-only row (for example "G C").
     // Transpose those rows too, but never scan ordinary lyrics for chord letters.
@@ -884,14 +891,14 @@ function displayText(song, targetKey = song?.key || 'C') {
     const plainChordRow = !line.includes('[') && !/[\u0E00-\u0E7F]/.test(line) && plainTokens.length > 0
       && plainTokens.some(isChordExpression)
       && plainTokens.every((token) => isChordExpression(token) || /^[|,;:/]+$/.test(token));
-    if (plainChordRow) return transposeChordExpression(line, shift);
+    if (plainChordRow) return transposeChordExpression(line, shift, targetKey);
 
     return line.replace(/\[([^\]]+)\]/g, (whole, value) => {
       const singleChord = strictChordToken(value.trim());
-      if (singleChord) return `[${transposeChord(singleChord, shift)}]`;
-      if (isChordExpression(value.trim())) return `[${transposeChordExpression(value.trim(), shift)}]`;
+      if (singleChord) return `[${transposeChord(singleChord, shift, targetKey)}]`;
+      if (isChordExpression(value.trim())) return `[${transposeChordExpression(value.trim(), shift, targetKey)}]`;
       const tokens = value.trim().split(/(\s+)/);
-      const transposed = tokens.map((token) => strictChordToken(token) ? transposeChord(strictChordToken(token), shift) : token);
+      const transposed = tokens.map((token) => strictChordToken(token) ? transposeChord(strictChordToken(token), shift, targetKey) : token);
       return `[${transposed.join('')}]`;
     });
   }).join('\n');
@@ -969,8 +976,13 @@ function chordHtml(text) {
   return escapeHtml(text).replace(/\[([^\]]+)\]/g, '<span class="chord-token">[$1]</span>');
 }
 
+function keyOptionsMarkup(value = 'C') {
+  return KEY_NAMES.map((name) => `<option value="${name}" ${name === value ? 'selected' : ''}>${name}</option>`).join('');
+}
+
 function keyOptions(select, value = 'C') {
-  select.innerHTML = KEYS.map((key, index) => `<option value="${SHARP_NAMES[index]}" ${SHARP_NAMES[index] === value ? 'selected' : ''}>${key}</option>`).join('');
+  select.innerHTML = keyOptionsMarkup(value);
+  select.title = 'เลือกชื่อคีย์ที่ต้องการ เช่น A# หรือ Bb (เสียงเดียวกัน แต่สะกดต่างกัน)';
 }
 
 function activeGroupRole() {
@@ -1175,7 +1187,7 @@ function renderGroupSuggestions() {
     const song = suggestion.song || {};
     const estimate = suggestSourceKey(song.text);
     const suggested = estimate?.key.replace(/m$/, '') || song.key || 'C';
-    const options = SHARP_NAMES.map((key) => `<option value="${key}" ${key === suggested ? 'selected' : ''}>${key}</option>`).join('');
+    const options = keyOptionsMarkup(suggested);
     return `<article class="group-suggestion-row"><div class="suggestion-heading"><strong>${escapeHtml(song.title || 'เพลงไม่มีชื่อ')}</strong><span>เสนอโดย ${escapeHtml(suggestion.suggestedByName || 'สมาชิก')}</span></div><small>${escapeHtml(song.artist || 'ไม่ระบุศิลปิน')} · คีย์ที่ระบุ ${escapeHtml(song.key || 'C')} · ยังไม่ยืนยัน</small><details><summary>ตรวจเนื้อเพลงและคอร์ด</summary><pre>${escapeHtml(song.text || 'ไม่มีเนื้อเพลงแนบ')}</pre></details>${estimate ? `<p class="hint">จากคอร์ดอาจเป็น ${escapeHtml(estimate.key)} · ความชัดเจน${escapeHtml(estimate.clarity)} · คำแนะนำเท่านั้น</p>` : ''}<label class="suggestion-key-label">ยืนยันคีย์ต้นฉบับ<select data-review-key="${escapeHtml(suggestion.id)}">${options}</select></label><div class="group-song-actions"><button class="primary-button" data-review-suggestion="approve" data-id="${escapeHtml(suggestion.id)}">ยืนยันคีย์และเพิ่มเข้าคลัง</button><button class="quiet-button" data-review-suggestion="reject" data-id="${escapeHtml(suggestion.id)}">ปฏิเสธ</button></div></article>`;
   }).join('');
 }
